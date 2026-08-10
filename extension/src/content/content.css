@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* This stylesheet is injected into our own shadow root only (see
+   src/content/index.tsx), so Tailwind's base reset never touches the host
+   page's styles — that's the whole point of mounting inside a shadow DOM. */
+
+:host,
+#notemark-root {
+  all: initial;
+}
+
+.nm-toolbar,
+.nm-sidebar {
+  font-family: 'Inter', system-ui, sans-serif;
+}
