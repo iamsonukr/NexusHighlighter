@@ -5,9 +5,9 @@ highlights** — the one Phase 2 feature actually implemented here end-to-end,
 as a real reference rather than a folder of empty stubs.
 
 **This is deployed completely separately from the extension.** The extension
-works fully (free tier) with no backend at all, and only talks to *this*
-service if/when you wire cloud sync into the popup — see "How this connects
-to the extension" below. It is a different, additional thing from the
+works fully (free tier) with no backend at all, and talks to *this* service
+for Pro highlight sync from the background worker. It is a different,
+additional thing from the
 license-verification server at `nexusbackend-ookk.onrender.com`, which
 already exists, is already live, and is not part of this repo.
 
@@ -52,23 +52,20 @@ sounds familiar:**
   limiter — e.g. `express-rate-limit` or Redis-backed — isn't yet)
 - Automated tests
 
-## How this connects to the extension (once you build that side)
+## How this connects to the extension
 
-The extension's `src/storage/db.ts` is already shaped for this — every
-`Highlight` has `isSynced`, `updatedAt`, `deletedAt`. Wiring real sync means
-adding, on the extension side:
-1. A sync queue that calls `POST /api/highlights` after each local write
-   (send the `x-license-key` header using the key already stored from
-   activation — see `extension/src/background/license.ts`)
-2. A periodic `GET /api/highlights?since=<lastSyncedAt>` pull, applying
-   server records into local storage (respecting `deletedAt` for
-   propagated deletions)
-3. Conflict handling for the `conflict: true` response
-   `upsertHighlight` can return (server already had a newer version)
+The extension background worker calls this service after a valid Pro license
+is present:
+1. `POST /api/highlights` after local create/update/delete. Deletes are sent
+   as soft-delete tombstones (`deletedAt`) so they can propagate.
+2. `GET /api/highlights?since=<lastSyncedAt>` after activation/reverification
+   to pull remote changes into `chrome.storage.local`.
+3. `conflict: true` responses are applied by saving the server's newer record
+   locally.
 
-None of that extension-side sync code exists yet — this backend is ready to
-be called, but nothing calls it yet. That's real Phase 2 work, not a
-one-line toggle.
+The default extension sync URL is `http://localhost:5000/api`. When building
+against a deployed backend, set `VITE_NOTEMARK_SYNC_API_URL` and add that
+origin to `extension/manifest.config.ts` `host_permissions`.
 
 ## Setup
 

@@ -3,10 +3,12 @@
 A Manifest V3 Chrome extension: select text on any webpage, highlight it, attach
 a note, and have it restored automatically the next time you visit that page.
 
-This is the **Phase 1 MVP** of the larger product brief: local-only persistence,
-no backend, no accounts — just a single license key checked against your own
-licensing server. Everything below reflects what's actually implemented, not
-the full long-term vision (that roadmap is at the bottom).
+This is the **Phase 1 MVP** of the larger product brief plus a minimal Pro
+highlight-sync bridge. Local persistence still works without this repo's
+backend; once a license key verifies, the background worker can sync
+highlights to `../backend` (`http://localhost:5000/api` by default; set
+`VITE_NOTEMARK_SYNC_API_URL` and add the matching manifest host permission
+for a deployed backend). There are still no accounts.
 
 ---
 
@@ -34,9 +36,9 @@ the full long-term vision (that roadmap is at the bottom).
 - **Dynamic content support**: a single debounced `MutationObserver` retries
   anchoring only for highlights that failed to render, only after the DOM goes
   quiet — not a continuous full-page scan
-- **Local persistence** via `chrome.storage.local` (`src/storage/db.ts`), with
-  soft deletes (`deletedAt`) and an `isSynced` flag already on every record so
-  a Phase 2 sync queue has somewhere to hook in
+- **Local persistence + Pro sync** via `chrome.storage.local`
+  (`src/storage/db.ts`) and `src/sync/client.ts`, with soft deletes
+  (`deletedAt`) propagated as tombstones
 - **Licensing, not accounts, with a real free tier**: no login/signup/payment
   UI anywhere in the extension. The extension is fully usable with **no key at
   all** — that's the free tier (see §3). Entering a key that verifies unlocks
@@ -51,15 +53,16 @@ the full long-term vision (that roadmap is at the bottom).
 
 ## 2. What's deliberately NOT in this build
 
-Per the brief's own phased instructions (§57–58), Phase 1 stays local-only:
+Per the brief's own phased instructions (§57–58), most Phase 2 features are
+still not present:
 
-- No backend/API, no MongoDB, no JWT/auth — Phase 2
+- No accounts/JWT auth. Highlight sync uses the stored license key in the
+  `x-license-key` header.
 - No collections, export, reading list, analytics dashboard, sharing — Phase 2/3
 - No AI features (summarize, ask-the-page, flashcards) — Phase 3, and should
   stay opt-in per action even once added (privacy-first, see brief §24)
-- No offline sync queue / conflict resolution — not needed yet since there's
-  no backend to sync with; the storage layer is already shaped for it (see
-  `src/storage/db.ts` header comment)
+- No durable offline retry queue yet. Sync retries on later writes or popup
+  re-verification, and applies the backend's last-write-wins conflicts.
 - No Options page beyond what's in the popup — add once there are settings
   worth a dedicated page (default color, privacy toggles, shortcut remapping)
 
@@ -112,8 +115,8 @@ rationale on why it's scoped this way, and the popup's usage bar
 (`src/popup/Popup.tsx`) for how the nudge is surfaced before the hard limit.
 
 Not yet built, but designed to slot into this same `license.hasAccess` gate
-once they exist: cloud sync, collections beyond a small free limit, AI
-features (see roadmap in §10).
+once they exist: collections beyond a small free limit and AI features (see
+roadmap in §10).
 
 ### What's actually enforceable, and what isn't
 
@@ -270,10 +273,9 @@ extension/                    # this workspace — independent from ../backend
 └── public/icons/
 ```
 
-This extension reads/writes nothing outside `chrome.storage.local` except
-the license-verify call — see `../backend/README.md` for the separate,
-optional sync service and what wiring it in would actually require on this
-side.
+This extension keeps its local source of truth in `chrome.storage.local`,
+calls the license-verify service for Pro access, and syncs Pro highlights
+through the separate backend described in `../backend/README.md`.
 
 ## 8. The critical persistence test (brief §46)
 
@@ -299,17 +301,15 @@ Before trusting this on real content, verify manually:
   this layer would need to change)
 - No `all_frames` support yet — highlighting inside iframes (e.g. embedded
   articles) isn't covered
-- No conflict resolution logic exists yet because there's no second device to
-  conflict with — that's real Phase 2 work, not a stub to fake now
+- Conflict handling is intentionally simple: the backend returns the newer
+  record and the extension applies it locally.
 
 ## 10. Roadmap (Phase 2 onward, per the original brief)
 
 - **Phase 2** — `../backend` now has a real scaffold: Node/Express/MongoDB,
   highlight sync scoped by license key (not JWT/accounts — see
-  `../backend/README.md` for why), last-write-wins conflict resolution. Not
-  yet wired: this extension doesn't call it — see `../backend/README.md`
-  "How this connects to the extension" for exactly what's missing on this
-  side (sync queue, periodic pull, conflict handling)
+  `../backend/README.md` for why), last-write-wins conflict resolution, and
+  extension-side push/pull wiring through `src/sync/client.ts`.
 - **Phase 3** — Notes/tags/collections dashboard, bookmarks, reading list,
   global search, export (Markdown/JSON/CSV/PDF)
 - **Phase 4** — Reader mode, analytics, sharing, command palette

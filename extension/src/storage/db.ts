@@ -4,12 +4,10 @@ import { DEFAULT_SETTINGS, EMPTY_LICENSE_STATE } from '@/types';
 /**
  * Local persistence layer.
  *
- * Phase 1 is local-only, so this wraps chrome.storage.local behind the same
- * shape a future REST-backed store would have (getAll / upsert / remove),
- * which keeps src/content and src/popup ignorant of *how* data is stored.
- * When Phase 2 (cloud sync) lands, this file is the only place that needs
- * a sync queue bolted on — everything above it already talks in terms of
- * Highlight/PageRecord objects.
+ * Local storage remains the source of truth, and the background sync client
+ * mirrors highlight changes to the backend once a Pro license exists.
+ * This wrapper keeps src/content and src/popup ignorant of where data is
+ * ultimately mirrored.
  *
  * chrome.storage.local (not localStorage) is used deliberately: it's
  * available to the background worker and content scripts alike, isn't wiped
@@ -42,6 +40,15 @@ export async function getAllHighlights(): Promise<Highlight[]> {
   return Object.values(map).filter((h) => !h.deletedAt);
 }
 
+export async function getAllHighlightRecords(): Promise<Highlight[]> {
+  const map = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
+  return Object.values(map);
+}
+
+export async function getHighlightRecordMap(): Promise<Record<string, Highlight>> {
+  return getBucket<Record<string, Highlight>>(KEYS.highlights, {});
+}
+
 export async function getHighlightsForPage(pageId: string): Promise<Highlight[]> {
   const all = await getAllHighlights();
   return all.filter((h) => h.pageId === pageId);
@@ -58,14 +65,16 @@ export async function upsertHighlight(highlight: Highlight): Promise<void> {
   await setBucket(KEYS.highlights, map);
 }
 
-export async function deleteHighlight(id: string): Promise<void> {
+export async function deleteHighlight(id: string): Promise<Highlight | undefined> {
   const map = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
   if (map[id]) {
-    // soft delete: keeps the record around so a future sync can propagate
+    // soft delete: keeps the record around so sync can propagate
     // the deletion instead of the row just silently reappearing.
     map[id] = { ...map[id], deletedAt: Date.now(), updatedAt: Date.now() };
     await setBucket(KEYS.highlights, map);
+    return map[id];
   }
+  return undefined;
 }
 
 /** Duplicate guard: same page + same exact text + not deleted. */

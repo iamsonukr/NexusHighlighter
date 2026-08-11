@@ -10,8 +10,8 @@ import pkg from './package.json';
 //   popup — no standing access to tab URLs otherwise
 // - downloads: the Pro export feature (Markdown/JSON) writes a file via
 //   chrome.downloads rather than a page-level anchor click
-// - host_permissions is scoped to ONLY the license verification domain, so
-//   the background worker's fetch() isn't subject to CORS for that one call.
+// - host_permissions is scoped to the license verification domain and the
+//   local sync backend, so the background worker can make those fetch() calls.
 //   It deliberately does NOT include "<all_urls>" — content_scripts.matches
 //   below grants content-script injection on its own and needs no
 //   corresponding host_permissions entry.
@@ -51,7 +51,7 @@ export default defineManifest({
     },
   ],
   permissions: ['storage', 'contextMenus', 'activeTab', 'downloads'],
-  host_permissions: ['https://nexusbackend-ookk.onrender.com/*'],
+  host_permissions: ['https://nexusbackend-ookk.onrender.com/*', 'http://localhost:5000/*', 'http://127.0.0.1:5000/*'],
   // Explicit MV3 CSP: extension pages may only load scripts bundled in the
   // package itself, matching the "Additional Requirements for Manifest V3"
   // policy (no <script src> to anything outside the extension, no eval-style

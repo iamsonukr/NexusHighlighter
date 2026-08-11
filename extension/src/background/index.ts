@@ -1,6 +1,7 @@
 import type { ExtensionMessage, LicenseState } from '@/types';
 import { activateLicense, reverifyStoredLicense } from './license';
 import { getLicenseState, clearLicenseState } from '@/storage/db';
+import { syncAllHighlights, syncHighlight } from '@/sync/client';
 
 // Lets already-open tabs flip between free/Pro immediately after activation
 // or "change key", instead of waiting for a reload.
@@ -12,16 +13,36 @@ function broadcastLicenseState(state: LicenseState) {
   });
 }
 
+function broadcastHighlightsUpdated(pageIds: Set<string>) {
+  if (pageIds.size === 0) return;
+  chrome.tabs.query({}, (tabs) => {
+    pageIds.forEach((pageId) => {
+      tabs.forEach((tab) => {
+        if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHTS_UPDATED', pageId }, () => void chrome.runtime.lastError);
+      });
+    });
+  });
+}
+
+function scheduleSyncAll() {
+  void syncAllHighlights()
+    .then(broadcastHighlightsUpdated)
+    .catch(() => undefined);
+}
+
 // ---- License re-verification cadence: on every browser start ----
 chrome.runtime.onStartup.addListener(async () => {
   const state = await reverifyStoredLicense();
   broadcastLicenseState(state);
+  if (state.hasAccess) scheduleSyncAll();
 });
 
 // Also check right after install/update, in case a key was already entered
 // before an update, or the service worker was asleep across a long session.
 chrome.runtime.onInstalled.addListener(() => {
-  reverifyStoredLicense();
+  reverifyStoredLicense().then((state) => {
+    if (state.hasAccess) scheduleSyncAll();
+  });
   setupContextMenus();
 });
 
@@ -92,6 +113,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       case 'VERIFY_LICENSE': {
         const state = await activateLicense(message.key);
         broadcastLicenseState(state);
+        if (state.hasAccess) scheduleSyncAll();
         sendResponse(state);
         break;
       }
@@ -108,6 +130,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         // start. See README §4 "What server-side checking actually buys you".
         const state = await reverifyStoredLicense();
         broadcastLicenseState(state);
+        if (state.hasAccess) scheduleSyncAll();
         sendResponse(state);
         break;
       }
@@ -116,6 +139,26 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         const state = await getLicenseState();
         broadcastLicenseState(state);
         sendResponse(undefined);
+        break;
+      }
+      case 'SYNC_HIGHLIGHT': {
+        try {
+          const pageIds = await syncHighlight(message.highlight);
+          broadcastHighlightsUpdated(pageIds);
+          sendResponse({ success: true });
+        } catch {
+          sendResponse({ success: false });
+        }
+        break;
+      }
+      case 'SYNC_ALL_HIGHLIGHTS': {
+        try {
+          const pageIds = await syncAllHighlights();
+          broadcastHighlightsUpdated(pageIds);
+          sendResponse({ success: true });
+        } catch {
+          sendResponse({ success: false });
+        }
         break;
       }
       default:

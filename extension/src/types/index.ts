@@ -49,7 +49,7 @@ export interface Highlight {
 
   createdAt: number;
   updatedAt: number;
-  deletedAt: number | null; // soft delete, so a future sync can propagate deletions
+  deletedAt: number | null; // soft delete, so sync can propagate deletions
 }
 
 export interface PageRecord {
@@ -90,6 +90,8 @@ export type ExtensionMessage =
   | { type: 'GET_LICENSE_STATE' }
   | { type: 'REVERIFY_LICENSE' }
   | { type: 'CLEAR_LICENSE' }
+  | { type: 'SYNC_HIGHLIGHT'; highlight: Highlight }
+  | { type: 'SYNC_ALL_HIGHLIGHTS' }
   | { type: 'LICENSE_UPDATED'; state: LicenseState };
 
 // ---------- Licensing ----------

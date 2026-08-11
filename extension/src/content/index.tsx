@@ -73,6 +73,17 @@ async function main() {
   let sidebarOpen = false;
   let upsellMessage: string | null = null;
 
+  function requestHighlightSync(highlight: Highlight) {
+    chrome.runtime.sendMessage({ type: 'SYNC_HIGHLIGHT', highlight }, () => void chrome.runtime.lastError);
+  }
+
+  async function reloadPageHighlights() {
+    removeAllHighlights();
+    highlights = await getHighlightsForPage(pageId);
+    restoreHighlights();
+    render();
+  }
+
   function render() {
     root.render(
       <>
@@ -152,6 +163,7 @@ async function main() {
       dup.color = color;
       dup.updatedAt = Date.now();
       await upsertHighlight(dup);
+      requestHighlightSync(dup);
       highlights = highlights.map((h) => (h.id === dup.id ? dup : h));
       render();
       return;
@@ -207,6 +219,7 @@ async function main() {
       deletedAt: null,
     };
     await upsertHighlight(highlight);
+    requestHighlightSync(highlight);
     highlights = [...highlights, highlight];
     render();
   }
@@ -217,13 +230,15 @@ async function main() {
     if (!h) return;
     const updated = { ...h, color, updatedAt: Date.now() };
     await upsertHighlight(updated);
+    requestHighlightSync(updated);
     highlights = highlights.map((x) => (x.id === id ? updated : x));
     render();
   }
 
   async function handleDelete(id: string) {
     removeHighlight(id);
-    await deleteHighlightRecord(id);
+    const deleted = await deleteHighlightRecord(id);
+    if (deleted) requestHighlightSync(deleted);
     highlights = highlights.filter((x) => x.id !== id);
     render();
   }
@@ -233,6 +248,7 @@ async function main() {
     if (!h) return;
     const updated = { ...h, note: note.trim() || null, updatedAt: Date.now() };
     await upsertHighlight(updated);
+    requestHighlightSync(updated);
     highlights = highlights.map((x) => (x.id === id ? updated : x));
     render();
   }
@@ -277,6 +293,8 @@ async function main() {
         upsellMessage = null;
         render();
       }
+    } else if (message?.type === 'HIGHLIGHTS_UPDATED' && message.pageId === pageId) {
+      void reloadPageHighlights();
     }
   });
 
