@@ -12,11 +12,7 @@
     "resolveJsonModule": true,
     "declaration": false,
     "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
+    "noUnusedParameters": true
   },
   "include": ["src"]
 }
