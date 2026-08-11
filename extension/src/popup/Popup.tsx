@@ -1,12 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Highlight, LicenseState } from '@/types';
 import { EMPTY_LICENSE_STATE } from '@/types';
 import { getStats, getHighlightsForPage, getAllHighlights, getAllPages, searchHighlights } from '@/storage/db';
 import { normalizeUrl, pageIdFor, getDomain } from '@/utils/url';
-import { FREE_HIGHLIGHT_LIMIT, HIGHLIGHT_WARNING_THRESHOLD } from '@/constants';
+import { FREE_HIGHLIGHT_LIMIT, HIGHLIGHT_WARNING_THRESHOLD, PURCHASE_URL } from '@/constants';
 import { buildMarkdownExport, buildJsonExport, downloadTextFile } from './export';
 
 type Stats = Awaited<ReturnType<typeof getStats>>;
+type PremiumTooltipTarget = 'search' | 'export';
+
+function openPurchasePage() {
+  chrome.tabs.create({ url: PURCHASE_URL });
+}
 
 export function Popup() {
   const [license, setLicense] = useState<LicenseState>(EMPTY_LICENSE_STATE);
@@ -33,6 +38,7 @@ export function Popup() {
       license={license}
       showKeyBox={showKeyBox || (!license.hasAccess && license.status === 'invalid')}
       onRequestUpgrade={() => setShowKeyBox(true)}
+      onPurchase={openPurchasePage}
       onLicenseChange={(state) => {
         setLicense(state);
         setShowKeyBox(false);
@@ -47,11 +53,13 @@ function Dashboard({
   license,
   showKeyBox,
   onRequestUpgrade,
+  onPurchase,
   onLicenseChange,
 }: {
   license: LicenseState;
   showKeyBox: boolean;
   onRequestUpgrade: () => void;
+  onPurchase: () => void;
   onLicenseChange: (state: LicenseState) => void;
 }) {
   const isPro = license.hasAccess;
@@ -60,6 +68,8 @@ function Dashboard({
   const [currentDomain, setCurrentDomain] = useState<string>('');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Highlight[] | null>(null);
+  const [premiumTooltip, setPremiumTooltip] = useState<{ target: PremiumTooltipTarget; message: string } | null>(null);
+  const tooltipTimer = useRef<number | undefined>();
 
   useEffect(() => {
     getStats().then(setStats);
@@ -75,6 +85,17 @@ function Dashboard({
       }
     });
   }, []);
+
+  useEffect(() => {
+    return () => window.clearTimeout(tooltipTimer.current);
+  }, []);
+
+  function showPremiumTooltip(target: PremiumTooltipTarget, message: string) {
+    if (isPro) return;
+    window.clearTimeout(tooltipTimer.current);
+    setPremiumTooltip({ target, message });
+    tooltipTimer.current = window.setTimeout(() => setPremiumTooltip(null), 4000);
+  }
 
   async function runSearch(q: string) {
     setQuery(q);
@@ -125,21 +146,43 @@ function Dashboard({
           <div className="flex h-7 w-7 items-center justify-center rounded bg-marker-yellow text-sm">✎</div>
           <h1 className="font-display text-lg leading-none">NoteMark</h1>
         </div>
-        <PlanBadge license={license} onClick={onRequestUpgrade} />
+        <PlanBadge license={license} onClick={onPurchase} />
       </div>
 
       <div className="mb-3">
         <input
           value={query}
-          onChange={(e) => runSearch(e.target.value)}
+          onChange={(e) => {
+            if (!isPro) {
+              showPremiumTooltip('search', 'Premium feature: buy a plan to search across every saved page.');
+              return;
+            }
+            runSearch(e.target.value);
+          }}
+          onFocus={() =>
+            !isPro && showPremiumTooltip('search', 'Premium feature: buy a plan to search across every saved page.')
+          }
+          onPointerDown={() =>
+            !isPro && showPremiumTooltip('search', 'Premium feature: buy a plan to search across every saved page.')
+          }
           placeholder={isPro ? 'Search all your highlights…' : 'Search this page in the sidebar →'}
-          disabled={!isPro}
-          className="w-full rounded border border-rule bg-white px-3 py-1.5 text-sm outline-none focus:border-accent disabled:cursor-not-allowed disabled:bg-rule/30 disabled:text-ink-soft"
+          readOnly={!isPro}
+          aria-disabled={!isPro}
+          className={`w-full rounded border border-rule px-3 py-1.5 text-sm outline-none focus:border-accent ${
+            isPro ? 'bg-white' : 'cursor-not-allowed bg-rule/30 text-ink-soft'
+          }`}
         />
+        {premiumTooltip?.target === 'search' && (
+          <PremiumTooltip
+            message={premiumTooltip.message}
+            onPurchase={onPurchase}
+            onRequestUpgrade={onRequestUpgrade}
+          />
+        )}
         {!isPro && (
           <p className="mt-1 text-[11px] text-ink-soft">
             Searching across every saved page is a{' '}
-            <button className="font-medium text-accent underline" onClick={onRequestUpgrade}>
+            <button className="font-medium text-accent underline" onClick={onPurchase}>
               Pro
             </button>{' '}
             feature.
@@ -187,8 +230,8 @@ function Dashboard({
           {nearLimit && (
             <p className="mt-1 text-[11px] text-marker-orange">
               Almost at your free limit —{' '}
-              <button className="underline" onClick={onRequestUpgrade}>
-                go unlimited
+              <button className="underline" onClick={onPurchase}>
+                buy a plan
               </button>
               .
             </p>
@@ -211,13 +254,32 @@ function Dashboard({
       </button>
 
       <div className="mb-3 flex gap-2">
-        <ExportButton label="Export .md" disabled={!isPro} onClick={() => exportAs('md')} />
-        <ExportButton label="Export .json" disabled={!isPro} onClick={() => exportAs('json')} />
+        <ExportButton
+          label="Export .md"
+          locked={!isPro}
+          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export Markdown or JSON.')}
+          onClick={() => exportAs('md')}
+        />
+        <ExportButton
+          label="Export .json"
+          locked={!isPro}
+          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export Markdown or JSON.')}
+          onClick={() => exportAs('json')}
+        />
       </div>
+      {premiumTooltip?.target === 'export' && (
+        <div className="-mt-2 mb-3">
+          <PremiumTooltip
+            message={premiumTooltip.message}
+            onPurchase={onPurchase}
+            onRequestUpgrade={onRequestUpgrade}
+          />
+        </div>
+      )}
       {!isPro && (
         <p className="-mt-2 mb-3 text-[11px] text-ink-soft">
           Export is a{' '}
-          <button className="font-medium text-accent underline" onClick={onRequestUpgrade}>
+          <button className="font-medium text-accent underline" onClick={onPurchase}>
             Pro
           </button>{' '}
           feature.
@@ -225,7 +287,7 @@ function Dashboard({
       )}
 
       {showKeyBox ? (
-        <LicenseBox license={license} onChange={onLicenseChange} />
+        <LicenseBox license={license} onPurchase={onPurchase} onChange={onLicenseChange} />
       ) : isPro ? (
         <p className="text-center text-[11px] text-ink-soft">
           {license.userFullName ? `Licensed to ${license.userFullName}` : 'Pro'}
@@ -241,9 +303,17 @@ function Dashboard({
           </button>
         </p>
       ) : (
-        <button onClick={onRequestUpgrade} className="w-full text-center text-xs font-medium text-accent underline">
-          Have a license key? Enter it here
-        </button>
+        <div className="space-y-2">
+          <button
+            onClick={onPurchase}
+            className="w-full rounded bg-marker-yellow py-2 text-sm font-medium text-ink hover:brightness-95"
+          >
+            Buy plan
+          </button>
+          <button onClick={onRequestUpgrade} className="w-full text-center text-xs font-medium text-accent underline">
+            Have a license key? Enter it here
+          </button>
+        </div>
       )}
     </div>
   );
@@ -269,7 +339,15 @@ function PlanBadge({ license, onClick }: { license: LicenseState; onClick: () =>
   );
 }
 
-function LicenseBox({ license, onChange }: { license: LicenseState; onChange: (state: LicenseState) => void }) {
+function LicenseBox({
+  license,
+  onPurchase,
+  onChange,
+}: {
+  license: LicenseState;
+  onPurchase: () => void;
+  onChange: (state: LicenseState) => void;
+}) {
   const [key, setKey] = useState(license.key ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(license.status === 'invalid' ? license.message : null);
@@ -308,7 +386,11 @@ function LicenseBox({ license, onChange }: { license: LicenseState; onChange: (s
         {submitting ? 'Verifying…' : 'Activate'}
       </button>
       <p className="mt-2 text-center text-[11px] text-ink-soft">
-        Purchases and billing happen on our website — this only checks whether a key is active.
+        Need a key?{' '}
+        <button className="font-medium text-accent underline" onClick={onPurchase}>
+          Buy plan
+        </button>
+        . Activation only checks whether your key is active.
       </p>
     </div>
   );
@@ -323,15 +405,55 @@ function StatBox({ label, value }: { label: string; value: number | undefined })
   );
 }
 
-function ExportButton({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+function PremiumTooltip({
+  message,
+  onPurchase,
+  onRequestUpgrade,
+}: {
+  message: string;
+  onPurchase: () => void;
+  onRequestUpgrade: () => void;
+}) {
+  return (
+    <div
+      role="tooltip"
+      className="mt-2 rounded border border-accent/30 bg-accent-soft px-3 py-2 text-[11px] leading-snug text-ink shadow-card"
+    >
+      <p>{message}</p>
+      <div className="mt-2 flex gap-3">
+        <button className="font-medium text-accent underline" onClick={onPurchase}>
+          Buy plan
+        </button>
+        <button className="font-medium text-accent underline" onClick={onRequestUpgrade}>
+          Enter key
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExportButton({
+  label,
+  locked,
+  onLockedAttempt,
+  onClick,
+}: {
+  label: string;
+  locked: boolean;
+  onLockedAttempt: () => void;
+  onClick: () => void;
+}) {
   return (
     <button
-      onClick={onClick}
-      disabled={disabled}
-      title={disabled ? 'Pro feature' : undefined}
-      className="flex-1 rounded border border-rule bg-white py-1.5 text-xs font-medium text-ink hover:bg-accent-soft disabled:cursor-not-allowed disabled:text-ink-soft disabled:hover:bg-white"
+      onClick={locked ? onLockedAttempt : onClick}
+      onFocus={() => locked && onLockedAttempt()}
+      aria-disabled={locked}
+      title={locked ? 'Premium feature' : undefined}
+      className={`flex-1 rounded border border-rule bg-white py-1.5 text-xs font-medium hover:bg-accent-soft ${
+        locked ? 'cursor-not-allowed text-ink-soft hover:bg-white' : 'text-ink'
+      }`}
     >
-      {disabled ? `🔒 ${label}` : label}
+      {locked ? `Locked ${label}` : label}
     </button>
   );
 }

@@ -117,6 +117,8 @@ async function main() {
         {upsellMessage && (
           <UpsellBanner
             message={upsellMessage}
+            actionLabel="Buy plan"
+            onAction={() => chrome.runtime.sendMessage({ type: 'OPEN_PURCHASE_PAGE' })}
             onDismiss={() => {
               upsellMessage = null;
               render();
@@ -174,7 +176,7 @@ async function main() {
     if (!isPro) {
       const total = (await getAllHighlights()).length;
       if (total >= FREE_HIGHLIGHT_LIMIT) {
-        upsellMessage = `You've reached the free limit of ${FREE_HIGHLIGHT_LIMIT} highlights. Enter a license key in the NoteMark popup to go unlimited.`;
+        upsellMessage = `You've reached the free limit of ${FREE_HIGHLIGHT_LIMIT} highlights. Buy a plan, then enter your license key in the NoteMark popup to go unlimited.`;
         render();
         return;
       }

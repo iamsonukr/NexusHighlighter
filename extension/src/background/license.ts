@@ -13,7 +13,7 @@ import { getLicenseState, saveLicenseState } from '@/storage/db';
  */
 
 export const VERIFY_URL = 'https://nexusbackend-ookk.onrender.com/api/subscriptions/verify';
-export const PRODUCT_ID = '6a7567937e01aee3cd38bb15';
+export const PRODUCT_ID = '6a7ae899e65a8aa481d69388';
 
 const VERIFY_TIMEOUT_MS = 15_000;
 

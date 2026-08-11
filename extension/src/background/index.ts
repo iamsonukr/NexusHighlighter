@@ -2,6 +2,7 @@ import type { ExtensionMessage, LicenseState } from '@/types';
 import { activateLicense, reverifyStoredLicense } from './license';
 import { getLicenseState, clearLicenseState } from '@/storage/db';
 import { syncAllHighlights, syncHighlight } from '@/sync/client';
+import { PURCHASE_URL } from '@/constants';
 
 // Lets already-open tabs flip between free/Pro immediately after activation
 // or "change key", instead of waiting for a reload.
@@ -119,6 +120,11 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       }
       case 'GET_LICENSE_STATE': {
         sendResponse(await getLicenseState());
+        break;
+      }
+      case 'OPEN_PURCHASE_PAGE': {
+        chrome.tabs.create({ url: PURCHASE_URL });
+        sendResponse({ success: true });
         break;
       }
       case 'REVERIFY_LICENSE': {

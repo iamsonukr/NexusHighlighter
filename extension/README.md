@@ -80,7 +80,7 @@ required to use the core product:
    "License key" input (`src/popup/Popup.tsx`)
 3. Submitting calls the background worker → `src/background/license.ts` →
    `POST https://nexusbackend-ookk.onrender.com/api/subscriptions/verify`
-   with `{ productId: "6a7567937e01aee3cd38bb15", licenseKey }`
+   with `{ productId: "6a7ae899e65a8aa481d69388", licenseKey }`
 4. On `hasAccess: true`, the result is cached in `chrome.storage.local`, the
    popup badge switches to the plan name, and the background worker
    broadcasts `LICENSE_UPDATED` to every open tab so the content script lifts

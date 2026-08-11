@@ -85,6 +85,7 @@ export type ExtensionMessage =
   | { type: 'HIGHLIGHTS_UPDATED'; pageId: string }
   | { type: 'GET_PAGE_STATS'; url: string }
   | { type: 'OPEN_SIDEBAR' }
+  | { type: 'OPEN_PURCHASE_PAGE' }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'VERIFY_LICENSE'; key: string }
   | { type: 'GET_LICENSE_STATE' }
