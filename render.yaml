@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: notemark-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    healthCheckPath: /api/health
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: node dist/server.js
+    envVars:
+      - key: MONGODB_URI
+        sync: false
