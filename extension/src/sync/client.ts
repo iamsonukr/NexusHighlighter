@@ -14,6 +14,11 @@ const SYNC_API_BASE_URL = (import.meta.env.VITE_NOTEMARK_SYNC_API_URL || 'http:/
 );
 const LAST_PULL_KEY = 'nm_sync_last_highlight_pull';
 
+interface SyncIdentity {
+  licenseKey: string;
+  cursorKey: string;
+}
+
 interface ApiResponse<T> {
   success: boolean;
   message?: string;
@@ -81,18 +86,27 @@ function fromRemoteHighlight(remote: RemoteHighlight): Highlight {
   };
 }
 
-async function getLicenseKey(): Promise<string | null> {
+function safeStorageKeyPart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+async function getSyncIdentity(): Promise<SyncIdentity | null> {
   const state = await getLicenseState();
-  return state.hasAccess && state.key ? state.key : null;
+  if (!state.key || !state.userId) return null;
+
+  return {
+    licenseKey: state.key,
+    cursorKey: `${LAST_PULL_KEY}_${safeStorageKeyPart(`user_${state.userId}`)}`,
+  };
 }
 
-async function readLastPull(): Promise<number> {
-  const result = await chrome.storage.local.get(LAST_PULL_KEY);
-  return Number(result[LAST_PULL_KEY] ?? 0);
+async function readLastPull(cursorKey: string): Promise<number> {
+  const result = await chrome.storage.local.get(cursorKey);
+  return Number(result[cursorKey] ?? 0);
 }
 
-async function writeLastPull(value: number): Promise<void> {
-  await chrome.storage.local.set({ [LAST_PULL_KEY]: value });
+async function writeLastPull(cursorKey: string, value: number): Promise<void> {
+  await chrome.storage.local.set({ [cursorKey]: value });
 }
 
 async function readJson<T>(res: Response): Promise<ApiResponse<T>> {
@@ -123,34 +137,34 @@ async function saveRemoteHighlight(remote: RemoteHighlight): Promise<string> {
 }
 
 export async function syncHighlight(highlight: Highlight): Promise<Set<string>> {
-  const licenseKey = await getLicenseKey();
+  const identity = await getSyncIdentity();
   const changedPageIds = new Set<string>();
-  if (!licenseKey) return changedPageIds;
+  if (!identity) return changedPageIds;
 
   const res = await fetch(`${SYNC_API_BASE_URL}/highlights`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-license-key': licenseKey,
+      'x-license-key': identity.licenseKey,
     },
     body: JSON.stringify(toRemoteHighlight(highlight)),
   });
   const payload = await readJson<RemoteHighlight>(res);
   if (payload.data) {
     changedPageIds.add(await saveRemoteHighlight(payload.data));
-    await writeLastPull(Math.max(await readLastPull(), payload.data.clientUpdatedAt));
+    await writeLastPull(identity.cursorKey, Math.max(await readLastPull(identity.cursorKey), payload.data.clientUpdatedAt));
   }
   return changedPageIds;
 }
 
-export async function pullRemoteHighlights(): Promise<Set<string>> {
-  const licenseKey = await getLicenseKey();
+export async function pullRemoteHighlights(options: { full?: boolean } = {}): Promise<Set<string>> {
+  const identity = await getSyncIdentity();
   const changedPageIds = new Set<string>();
-  if (!licenseKey) return changedPageIds;
+  if (!identity) return changedPageIds;
 
-  const since = await readLastPull();
+  const since = options.full ? 0 : await readLastPull(identity.cursorKey);
   const res = await fetch(`${SYNC_API_BASE_URL}/highlights?since=${encodeURIComponent(String(since))}`, {
-    headers: { 'x-license-key': licenseKey },
+    headers: { 'x-license-key': identity.licenseKey },
   });
   const payload = await readJson<RemoteHighlight[]>(res);
   const remotes = payload.data ?? [];
@@ -164,11 +178,11 @@ export async function pullRemoteHighlights(): Promise<Set<string>> {
     changedPageIds.add(await saveRemoteHighlight(remote));
   }
 
-  if (nextLastPull > since) await writeLastPull(nextLastPull);
+  if (nextLastPull > since) await writeLastPull(identity.cursorKey, nextLastPull);
   return changedPageIds;
 }
 
-export async function syncAllHighlights(): Promise<Set<string>> {
+export async function syncAllHighlights(options: { fullPull?: boolean } = {}): Promise<Set<string>> {
   const changedPageIds = new Set<string>();
   const records = await getAllHighlightRecords();
 
@@ -181,7 +195,7 @@ export async function syncAllHighlights(): Promise<Set<string>> {
     }
   }
 
-  const pulledPageIds = await pullRemoteHighlights();
+  const pulledPageIds = await pullRemoteHighlights({ full: options.fullPull });
   pulledPageIds.forEach((pageId) => changedPageIds.add(pageId));
   return changedPageIds;
 }

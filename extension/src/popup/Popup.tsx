@@ -4,7 +4,7 @@ import { EMPTY_LICENSE_STATE } from '@/types';
 import { getStats, getHighlightsForPage, getAllHighlights, getAllPages, searchHighlights } from '@/storage/db';
 import { normalizeUrl, pageIdFor, getDomain } from '@/utils/url';
 import { FREE_HIGHLIGHT_LIMIT, HIGHLIGHT_WARNING_THRESHOLD, PURCHASE_URL } from '@/constants';
-import { buildMarkdownExport, buildJsonExport, downloadTextFile } from './export';
+import { buildWordExport, downloadPdfExport, downloadTextFile } from './export';
 
 type Stats = Awaited<ReturnType<typeof getStats>>;
 type PremiumTooltipTarget = 'search' | 'export';
@@ -36,7 +36,7 @@ export function Popup() {
   return (
     <Dashboard
       license={license}
-      showKeyBox={showKeyBox || (!license.hasAccess && license.status === 'invalid')}
+      showKeyBox={showKeyBox || (!license.userId && license.status === 'invalid')}
       onRequestUpgrade={() => setShowKeyBox(true)}
       onPurchase={openPurchasePage}
       onLicenseChange={(state) => {
@@ -110,7 +110,7 @@ function Dashboard({
     setResults(await searchHighlights(q));
   }
 
-  async function exportAs(format: 'md' | 'json') {
+  async function exportAs(format: 'pdf' | 'doc') {
     // Re-check live rather than trusting the license prop from when the
     // popup opened — belt-and-braces for the one Pro action that actually
     // writes a file to disk.
@@ -123,10 +123,10 @@ function Dashboard({
       return;
     }
     const [highlights, pages] = await Promise.all([getAllHighlights(), getAllPages()]);
-    if (format === 'md') {
-      downloadTextFile('notemark-export.md', buildMarkdownExport(highlights, pages), 'text/markdown');
+    if (format === 'pdf') {
+      await downloadPdfExport(highlights, pages);
     } else {
-      downloadTextFile('notemark-export.json', buildJsonExport(highlights, pages), 'application/json');
+      downloadTextFile('notemark-study-notes.doc', buildWordExport(highlights, pages), 'application/msword');
     }
   }
 
@@ -253,18 +253,18 @@ function Dashboard({
         Open sidebar on this page
       </button>
 
-      <div className="mb-3 flex gap-2">
+      <div className="mb-2 grid grid-cols-2 gap-2">
         <ExportButton
-          label="Export .md"
+          label="Export PDF"
           locked={!isPro}
-          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export Markdown or JSON.')}
-          onClick={() => exportAs('md')}
+          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export PDF or Word notes.')}
+          onClick={() => exportAs('pdf')}
         />
         <ExportButton
-          label="Export .json"
+          label="Export Docs"
           locked={!isPro}
-          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export Markdown or JSON.')}
-          onClick={() => exportAs('json')}
+          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export PDF or Word notes.')}
+          onClick={() => exportAs('doc')}
         />
       </div>
       {premiumTooltip?.target === 'export' && (
@@ -278,11 +278,11 @@ function Dashboard({
       )}
       {!isPro && (
         <p className="-mt-2 mb-3 text-[11px] text-ink-soft">
-          Export is a{' '}
+          PDF and Docs export are{' '}
           <button className="font-medium text-accent underline" onClick={onPurchase}>
             Pro
           </button>{' '}
-          feature.
+          features.
         </p>
       )}
 
@@ -358,7 +358,7 @@ function LicenseBox({
     setError(null);
     chrome.runtime.sendMessage({ type: 'VERIFY_LICENSE', key: key.trim() }, (state: LicenseState) => {
       setSubmitting(false);
-      if (state?.hasAccess) {
+      if (state?.userId) {
         onChange(state);
       } else {
         setError(state?.message ?? 'Could not verify this license key.');

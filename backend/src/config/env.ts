@@ -19,5 +19,5 @@ export const config = {
   // only so this backend can independently confirm a license before
   // accepting a sync write. They are NOT this backend's own auth system.
   licenseVerifyUrl: 'https://nexusbackend-ookk.onrender.com/api/subscriptions/verify',
-  licenseProductId: '6a7567937e01aee3cd38bb15',
+  licenseProductId: '6a7ae899e65a8aa481d69388',
 } as const;

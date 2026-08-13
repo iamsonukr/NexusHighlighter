@@ -168,6 +168,7 @@ export interface LicenseState {
   status: LicenseStatus;
   hasAccess: boolean;
   message: string | null;
+  userId: string | null;
   userFullName: string | null;
   planName: string | null;
   expiresAt: string | null;
@@ -179,6 +180,7 @@ export const EMPTY_LICENSE_STATE: LicenseState = {
   status: 'unset',
   hasAccess: false,
   message: null,
+  userId: null,
   userFullName: null,
   planName: null,
   expiresAt: null,

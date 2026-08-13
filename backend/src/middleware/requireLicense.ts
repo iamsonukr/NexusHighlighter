@@ -1,23 +1,26 @@
 import type { NextFunction, Request, Response } from 'express';
 import { config } from '../config/env.js';
-import { hashLicenseKey } from '../utils/hashLicenseKey.js';
+import { hashLegacyLicenseKey, hashSyncOwner } from '../utils/hashLicenseKey.js';
 import { logger } from '../utils/logger.js';
 
 export interface AuthedRequest extends Request {
-  licenseKeyHash?: string;
+  syncOwnerHash?: string;
+  legacyLicenseKeyHash?: string;
 }
 
+type VerifyLicenseResponse = {
+  success: boolean;
+  hasAccess?: boolean;
+  message?: string;
+  user?: {
+    id?: string;
+  } | null;
+};
+
 /**
- * Cloud sync is a Pro feature, so every sync route re-checks the license
- * against the SAME external verify endpoint the extension itself calls
- * (see backend/.env.example — this is a separate, already-live service,
- * not something this backend owns). This backend never trusts a client's
- * bare assertion that it's "Pro" — the whole point of doing this
- * server-side is that a client can't just claim access.
- *
- * On success, req.licenseKeyHash is set for the route handler to scope
- * queries by. The raw key itself is discarded after this middleware runs;
- * it is never logged (see logger.ts) or persisted (see hashLicenseKey.ts).
+ * Cloud sync access is available to any registered identity the license server
+ * can verify. Paid access can still gate other extension features, but sync
+ * records are owned by the verified customer id.
  */
 export async function requireLicense(req: AuthedRequest, res: Response, next: NextFunction) {
   const licenseKey = req.header('x-license-key');
@@ -31,14 +34,20 @@ export async function requireLicense(req: AuthedRequest, res: Response, next: Ne
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ productId: config.licenseProductId, licenseKey }),
     });
-    const data = (await verifyRes.json()) as { success: boolean; hasAccess?: boolean; message?: string };
+    const data = (await verifyRes.json()) as VerifyLicenseResponse;
 
-    if (!data.success || !data.hasAccess) {
+    if (!data.success) {
       logger.info('license_check_denied', { reason: data.message ?? 'no access' });
-      return res.status(403).json({ success: false, message: data.message ?? 'License is not active.' });
+      return res.status(403).json({ success: false, message: data.message ?? 'Registration could not be verified.' });
     }
 
-    req.licenseKeyHash = hashLicenseKey(licenseKey);
+    if (!data.user?.id) {
+      logger.error('license_check_missing_user_id', { message: 'verify response did not include user.id' });
+      return res.status(502).json({ success: false, message: 'License server did not return a sync owner.' });
+    }
+
+    req.syncOwnerHash = hashSyncOwner(data.user.id);
+    req.legacyLicenseKeyHash = hashLegacyLicenseKey(licenseKey);
     next();
   } catch (err) {
     logger.error('license_check_failed', { message: err instanceof Error ? err.message : 'unknown' });

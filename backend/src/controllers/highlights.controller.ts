@@ -4,18 +4,34 @@ import { upsertHighlightSchema } from '../validators/highlight.validator.js';
 import type { AuthedRequest } from '../middleware/requireLicense.js';
 import { ApiError } from '../middleware/errorHandler.js';
 
+function requireSyncOwner(req: AuthedRequest): string {
+  if (!req.syncOwnerHash) throw new ApiError(401, 'Missing sync owner.');
+  return req.syncOwnerHash;
+}
+
+async function migrateLegacyHighlights(req: AuthedRequest) {
+  if (!req.syncOwnerHash || !req.legacyLicenseKeyHash) return;
+
+  await Highlight.updateMany(
+    {
+      licenseKeyHash: req.legacyLicenseKeyHash,
+      syncOwnerHash: { $exists: false },
+    },
+    { $set: { syncOwnerHash: req.syncOwnerHash } }
+  );
+}
+
 /**
  * GET /api/highlights?since=<clientUpdatedAt>
- * Returns everything changed after `since` for this license, so a device
- * can pull incremental changes rather than the whole library every time.
- * Soft-deleted records ARE included (deletedAt set) so the client can
- * remove them locally too — see the extension's storage/db.ts soft-delete
- * comment for the matching half of this.
+ * Returns everything changed after `since` for this verified customer.
  */
 export async function listHighlights(req: AuthedRequest, res: Response) {
+  const syncOwnerHash = requireSyncOwner(req);
+  await migrateLegacyHighlights(req);
+
   const since = Number(req.query.since ?? 0);
   const docs = await Highlight.find({
-    licenseKeyHash: req.licenseKeyHash,
+    syncOwnerHash,
     clientUpdatedAt: { $gt: Number.isFinite(since) ? since : 0 },
   }).lean();
   res.json({ success: true, data: docs });
@@ -23,12 +39,12 @@ export async function listHighlights(req: AuthedRequest, res: Response) {
 
 /**
  * POST /api/highlights
- * Upsert-by-clientId, last-write-wins on clientUpdatedAt. This is
- * deliberately simple (brief §37's "conflict resolution" in its fullest
- * form — e.g. field-level merges — is real future work, not something to
- * fake here); last-write-wins is an honest, documented starting point.
+ * Upsert-by-clientId, last-write-wins on clientUpdatedAt.
  */
 export async function upsertHighlight(req: AuthedRequest, res: Response) {
+  const syncOwnerHash = requireSyncOwner(req);
+  await migrateLegacyHighlights(req);
+
   const parsed = upsertHighlightSchema.safeParse(req.body);
   if (!parsed.success) {
     throw new ApiError(400, `Invalid highlight payload: ${parsed.error.issues[0]?.message ?? 'validation failed'}`);
@@ -36,29 +52,30 @@ export async function upsertHighlight(req: AuthedRequest, res: Response) {
   const input = parsed.data;
 
   const existing = await Highlight.findOne({
-    licenseKeyHash: req.licenseKeyHash,
+    syncOwnerHash,
     clientId: input.clientId,
   });
 
   if (existing && existing.clientUpdatedAt >= input.clientUpdatedAt) {
-    // The server already has an equal-or-newer version — tell the client
-    // to take THIS version rather than overwrite it with a stale one.
     return res.json({ success: true, data: existing, conflict: true });
   }
 
   const doc = await Highlight.findOneAndUpdate(
-    { licenseKeyHash: req.licenseKeyHash, clientId: input.clientId },
-    { $set: { ...input, licenseKeyHash: req.licenseKeyHash } },
+    { syncOwnerHash, clientId: input.clientId },
+    { $set: { ...input, syncOwnerHash } },
     { upsert: true, new: true }
   );
 
   res.json({ success: true, data: doc });
 }
 
-/** DELETE /api/highlights/:clientId — soft delete, mirrors the extension's own soft-delete semantics. */
+/** DELETE /api/highlights/:clientId - soft delete. */
 export async function deleteHighlight(req: AuthedRequest, res: Response) {
+  const syncOwnerHash = requireSyncOwner(req);
+  await migrateLegacyHighlights(req);
+
   const doc = await Highlight.findOneAndUpdate(
-    { licenseKeyHash: req.licenseKeyHash, clientId: req.params.clientId },
+    { syncOwnerHash, clientId: req.params.clientId },
     { $set: { deletedAt: Date.now(), clientUpdatedAt: Date.now() } },
     { new: true }
   );

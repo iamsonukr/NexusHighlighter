@@ -47,7 +47,7 @@ for a deployed backend). There are still no accounts.
   - Free: highlighting, notes, colors, tags, per-page sidebar search — capped
     at 500 total highlights across all pages
   - Pro: unlimited highlights, cross-page global search (in the popup),
-    Markdown/JSON export — all gated behind `license.hasAccess`, re-checked
+    PDF/Docs export — all gated behind `license.hasAccess`, re-checked
     live via a `LICENSE_UPDATED` broadcast so open tabs flip the moment a key
     is activated, with no reload needed
 
@@ -58,7 +58,7 @@ still not present:
 
 - No accounts/JWT auth. Highlight sync uses the stored license key in the
   `x-license-key` header.
-- No collections, export, reading list, analytics dashboard, sharing — Phase 2/3
+- No collections, reading list, analytics dashboard, sharing — Phase 2/3
 - No AI features (summarize, ask-the-page, flashcards) — Phase 3, and should
   stay opt-in per action even once added (privacy-first, see brief §24)
 - No durable offline retry queue yet. Sync retries on later writes or popup
@@ -106,7 +106,7 @@ extension — it only ever calls the one `verify` endpoint.
 | Per-page sidebar search | ✅ | ✅ |
 | Total highlights | 500 (`FREE_HIGHLIGHT_LIMIT` in `src/constants.ts`) | Unlimited |
 | Search across every saved page (popup) | ❌ | ✅ |
-| Export (Markdown / JSON) | ❌ | ✅ |
+| Export (PDF / Docs) | ❌ | ✅ |
 
 The free tier is intentionally generous for daily use — the cap only bites
 once someone has built up a real library, which is exactly when the "go
@@ -262,7 +262,7 @@ extension/                    # this workspace — independent from ../backend
 │   │   └── content.css        # Tailwind, injected into the shadow root only
 │   ├── popup/
 │   │   ├── Popup.tsx          # license gate + stats dashboard
-│   │   ├── export.ts           # Pro-gated Markdown/JSON export
+│   │   ├── export.ts           # Pro-gated PDF/Docs export
 │   │   ├── main.tsx
 │   │   └── index.html
 │   ├── storage/
@@ -311,7 +311,7 @@ Before trusting this on real content, verify manually:
   `../backend/README.md` for why), last-write-wins conflict resolution, and
   extension-side push/pull wiring through `src/sync/client.ts`.
 - **Phase 3** — Notes/tags/collections dashboard, bookmarks, reading list,
-  global search, export (Markdown/JSON/CSV/PDF)
+  CSV export and richer export templates
 - **Phase 4** — Reader mode, analytics, sharing, command palette
 - **Phase 5** — Opt-in AI features (summarize, ask-the-page, flashcards, quiz),
   each gated behind an explicit per-action confirmation, never automatic

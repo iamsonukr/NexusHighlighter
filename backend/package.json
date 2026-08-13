@@ -2,7 +2,7 @@
   "name": "notemark-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "NoteMark Phase 2 backend — cloud sync for highlights/notes, scoped by license key (no user accounts). Deployed independently from the extension.",
+  "description": "NoteMark Phase 2 backend — cloud sync for highlights/notes, scoped by verified license owner. Deployed independently from the extension.",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",

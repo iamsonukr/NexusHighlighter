@@ -113,9 +113,10 @@ function responseToState(key: string, response: VerifyLicenseResponse): LicenseS
 
   return {
     key,
-    status: response.hasAccess ? 'valid' : 'invalid',
+    status: 'valid',
     hasAccess: response.hasAccess,
     message: response.message,
+    userId: response.user?.id ?? null,
     userFullName: response.user?.fullName ?? null,
     planName: response.plan?.name ?? null,
     expiresAt: response.license?.expiresAt ?? response.subscription?.endDate ?? null,

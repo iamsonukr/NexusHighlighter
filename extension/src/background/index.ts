@@ -25,24 +25,28 @@ function broadcastHighlightsUpdated(pageIds: Set<string>) {
   });
 }
 
-function scheduleSyncAll() {
-  void syncAllHighlights()
+function scheduleSyncAll(options: { fullPull?: boolean } = {}) {
+  void syncAllHighlights(options)
     .then(broadcastHighlightsUpdated)
     .catch(() => undefined);
+}
+
+function canUseCloudSync(state: LicenseState) {
+  return Boolean(state.key && state.userId);
 }
 
 // ---- License re-verification cadence: on every browser start ----
 chrome.runtime.onStartup.addListener(async () => {
   const state = await reverifyStoredLicense();
   broadcastLicenseState(state);
-  if (state.hasAccess) scheduleSyncAll();
+  if (canUseCloudSync(state)) scheduleSyncAll();
 });
 
 // Also check right after install/update, in case a key was already entered
 // before an update, or the service worker was asleep across a long session.
 chrome.runtime.onInstalled.addListener(() => {
   reverifyStoredLicense().then((state) => {
-    if (state.hasAccess) scheduleSyncAll();
+    if (canUseCloudSync(state)) scheduleSyncAll();
   });
   setupContextMenus();
 });
@@ -114,7 +118,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       case 'VERIFY_LICENSE': {
         const state = await activateLicense(message.key);
         broadcastLicenseState(state);
-        if (state.hasAccess) scheduleSyncAll();
+        if (canUseCloudSync(state)) scheduleSyncAll({ fullPull: true });
         sendResponse(state);
         break;
       }
@@ -136,7 +140,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         // start. See README §4 "What server-side checking actually buys you".
         const state = await reverifyStoredLicense();
         broadcastLicenseState(state);
-        if (state.hasAccess) scheduleSyncAll();
+        if (canUseCloudSync(state)) scheduleSyncAll();
         sendResponse(state);
         break;
       }

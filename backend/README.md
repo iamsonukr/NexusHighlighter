@@ -23,13 +23,10 @@ accounts on top just for sync:
 - `src/middleware/requireLicense.ts` re-verifies that key against the SAME
   external license server the extension itself calls — never trusts a
   client's bare claim of being "Pro" — and only then lets the request through
-- Records are scoped by a **hash** of the license key
-  (`src/utils/hashLicenseKey.ts`), not the raw key, so a database dump alone
-  doesn't hand out working license keys
-- This means: if a license key is ever transferred to a different device/
-  browser, sync data follows the key, not a "user" — that's an intentional
-  consequence of not having accounts, worth being aware of before promising
-  anything stronger (e.g. "per-seat" limits) in marketing copy
+- The license server's verified `user.id` is hashed and used as the sync owner,
+  so highlights follow the customer across renewals or replacement keys
+- The raw license key and raw external user id are never stored in this backend
+  database; only deterministic lookup hashes are stored
 
 ## What's implemented vs. stubbed
 
@@ -59,7 +56,9 @@ is present:
 1. `POST /api/highlights` after local create/update/delete. Deletes are sent
    as soft-delete tombstones (`deletedAt`) so they can propagate.
 2. `GET /api/highlights?since=<lastSyncedAt>` after activation/reverification
-   to pull remote changes into `chrome.storage.local`.
+   to pull remote changes into `chrome.storage.local`. Activation performs a
+   full pull; later checks use an incremental cursor scoped to the verified
+   sync owner.
 3. `conflict: true` responses are applied by saving the server's newer record
    locally.
 

@@ -1,12 +1,9 @@
 import { Schema, model, type InferSchemaType } from 'mongoose';
 
 /**
- * There is no user-accounts system (see the extension's README — no login,
- * no signup). Instead every synced record is scoped by the license key that
- * created it, the same key the extension already verifies with the license
- * server. `licenseKeyHash` (not the raw key) is what's actually stored and
- * queried on, so a database dump alone doesn't hand out working keys — see
- * utils/hashLicenseKey.ts.
+ * The external license server verifies the key and returns the customer
+ * user.id. Synced records are scoped by a hash of that stable id so renewals
+ * and replacement keys keep seeing the same highlight library.
  */
 const AnchorSchema = new Schema(
   {
@@ -23,8 +20,9 @@ const AnchorSchema = new Schema(
 
 const HighlightSchema = new Schema(
   {
-    clientId: { type: String, required: true }, // id generated on-device (src/utils/url.ts uid())
-    licenseKeyHash: { type: String, required: true, index: true },
+    clientId: { type: String, required: true },
+    syncOwnerHash: { type: String, required: true, index: true },
+    licenseKeyHash: { type: String, default: null, index: true },
 
     pageId: { type: String, required: true, index: true },
     url: { type: String, required: true },
@@ -41,18 +39,15 @@ const HighlightSchema = new Schema(
     isPinned: { type: Boolean, default: false },
     isArchived: { type: Boolean, default: false },
 
-    // Client-supplied timestamps drive last-write-wins conflict resolution
-    // (brief §37) — they are NOT the same as Mongoose's own timestamps below,
-    // which track when this server last saw the record.
     clientCreatedAt: { type: Number, required: true },
     clientUpdatedAt: { type: Number, required: true },
-    deletedAt: { type: Number, default: null }, // soft delete, so deletions can propagate to other devices
+    deletedAt: { type: Number, default: null },
   },
   { timestamps: true }
 );
 
-HighlightSchema.index({ licenseKeyHash: 1, clientId: 1 }, { unique: true });
-HighlightSchema.index({ licenseKeyHash: 1, pageId: 1 });
+HighlightSchema.index({ syncOwnerHash: 1, clientId: 1 }, { unique: true });
+HighlightSchema.index({ syncOwnerHash: 1, pageId: 1 });
 
 export type HighlightDoc = InferSchemaType<typeof HighlightSchema>;
 export const Highlight = model('Highlight', HighlightSchema);
