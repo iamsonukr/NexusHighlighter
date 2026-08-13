@@ -100,7 +100,7 @@ export async function reverifyStoredLicense(): Promise<LicenseState> {
   return state;
 }
 
-function responseToState(key: string, response: VerifyLicenseResponse): LicenseState {
+export function responseToState(key: string, response: VerifyLicenseResponse): LicenseState {
   if (!response.success) {
     return {
       ...EMPTY_LICENSE_STATE,
@@ -111,10 +111,13 @@ function responseToState(key: string, response: VerifyLicenseResponse): LicenseS
     };
   }
 
+  const planType = response.plan?.type ? String(response.plan.type).toLowerCase() : null;
+  const hasPaidAccess = response.hasAccess && planType !== 'free';
+
   return {
     key,
     status: 'valid',
-    hasAccess: response.hasAccess,
+    hasAccess: hasPaidAccess,
     message: response.message,
     userId: response.user?.id ?? null,
     userFullName: response.user?.fullName ?? null,

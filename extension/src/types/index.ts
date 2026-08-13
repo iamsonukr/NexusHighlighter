@@ -86,6 +86,7 @@ export type ExtensionMessage =
   | { type: 'GET_PAGE_STATS'; url: string }
   | { type: 'OPEN_SIDEBAR' }
   | { type: 'OPEN_PURCHASE_PAGE' }
+  | { type: 'START_EXTENSION_AUTH' }
   | { type: 'TOGGLE_SIDEBAR' }
   | { type: 'VERIFY_LICENSE'; key: string }
   | { type: 'GET_LICENSE_STATE' }
@@ -160,6 +161,16 @@ export interface VerifyLicenseFailure {
 }
 
 export type VerifyLicenseResponse = VerifyLicenseSuccess | VerifyLicenseFailure;
+
+export interface ExtensionTokenResponse {
+  success: boolean;
+  message?: string;
+  extensionSlug?: string;
+  extensionToken?: string;
+  tokenType?: 'license_key' | string;
+  state?: string;
+  access?: Omit<VerifyLicenseSuccess, 'success'> | VerifyLicenseFailure;
+}
 
 export type LicenseStatus = 'unset' | 'checking' | 'valid' | 'invalid' | 'offline';
 

@@ -1,5 +1,7 @@
 import type { ExtensionMessage, LicenseState } from '@/types';
+import { EMPTY_LICENSE_STATE } from '@/types';
 import { activateLicense, reverifyStoredLicense } from './license';
+import { startExtensionAuth } from './extensionAuth';
 import { getLicenseState, clearLicenseState } from '@/storage/db';
 import { syncAllHighlights, syncHighlight } from '@/sync/client';
 import { PURCHASE_URL } from '@/constants';
@@ -129,6 +131,21 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       case 'OPEN_PURCHASE_PAGE': {
         chrome.tabs.create({ url: PURCHASE_URL });
         sendResponse({ success: true });
+        break;
+      }
+      case 'START_EXTENSION_AUTH': {
+        try {
+          const state = await startExtensionAuth();
+          broadcastLicenseState(state);
+          if (canUseCloudSync(state)) scheduleSyncAll({ fullPull: true });
+          sendResponse(state);
+        } catch (error) {
+          sendResponse({
+            ...EMPTY_LICENSE_STATE,
+            status: 'invalid',
+            message: error instanceof Error ? error.message : 'Could not connect CodersNexus.',
+          });
+        }
         break;
       }
       case 'REVERIFY_LICENSE': {

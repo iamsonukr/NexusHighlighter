@@ -50,7 +50,7 @@ export default defineManifest({
       all_frames: false,
     },
   ],
-  permissions: ['storage', 'contextMenus', 'activeTab', 'downloads'],
+  permissions: ['storage', 'contextMenus', 'activeTab', 'downloads', 'identity'],
   host_permissions: [
     'https://nexusbackend-ookk.onrender.com/*',
     'https://nexushighlighter.onrender.com/*',

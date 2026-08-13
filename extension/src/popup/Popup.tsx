@@ -13,9 +13,24 @@ function openPurchasePage() {
   chrome.tabs.create({ url: PURCHASE_URL });
 }
 
+function startCodersNexusLogin(): Promise<LicenseState> {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: 'START_EXTENSION_AUTH' }, (state: LicenseState | undefined) => {
+      const error = chrome.runtime.lastError;
+      if (error) {
+        reject(new Error(error.message || 'Could not open CodersNexus login.'));
+        return;
+      }
+      resolve(state ?? EMPTY_LICENSE_STATE);
+    });
+  });
+}
+
 export function Popup() {
   const [license, setLicense] = useState<LicenseState>(EMPTY_LICENSE_STATE);
   const [loadingLicense, setLoadingLicense] = useState(true);
+  const [connectingAccount, setConnectingAccount] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [showKeyBox, setShowKeyBox] = useState(false);
 
   useEffect(() => {
@@ -33,10 +48,32 @@ export function Popup() {
     return <div className="bg-paper p-6 text-sm text-ink-soft">Loading…</div>;
   }
 
+  async function connectAccount() {
+    if (connectingAccount) return;
+    setConnectingAccount(true);
+    setAuthError(null);
+
+    try {
+      const state = await startCodersNexusLogin();
+      setLicense(state);
+      setShowKeyBox(false);
+      if (!state.key || !state.userId) {
+        setAuthError(state.message || 'CodersNexus did not return a valid extension token.');
+      }
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not connect CodersNexus.');
+    } finally {
+      setConnectingAccount(false);
+    }
+  }
+
   return (
     <Dashboard
       license={license}
+      authError={authError}
+      connectingAccount={connectingAccount}
       showKeyBox={showKeyBox || (!license.userId && license.status === 'invalid')}
+      onConnect={connectAccount}
       onRequestUpgrade={() => setShowKeyBox(true)}
       onPurchase={openPurchasePage}
       onLicenseChange={(state) => {
@@ -51,18 +88,25 @@ export function Popup() {
 
 function Dashboard({
   license,
+  authError,
+  connectingAccount,
   showKeyBox,
+  onConnect,
   onRequestUpgrade,
   onPurchase,
   onLicenseChange,
 }: {
   license: LicenseState;
+  authError: string | null;
+  connectingAccount: boolean;
   showKeyBox: boolean;
+  onConnect: () => void;
   onRequestUpgrade: () => void;
   onPurchase: () => void;
   onLicenseChange: (state: LicenseState) => void;
 }) {
   const isPro = license.hasAccess;
+  const isConnected = Boolean(license.key && license.userId);
   const [stats, setStats] = useState<Stats | null>(null);
   const [currentPageCount, setCurrentPageCount] = useState<number | null>(null);
   const [currentDomain, setCurrentDomain] = useState<string>('');
@@ -146,7 +190,7 @@ function Dashboard({
           <div className="flex h-7 w-7 items-center justify-center rounded bg-marker-yellow text-sm">✎</div>
           <h1 className="font-display text-lg leading-none">NoteMark</h1>
         </div>
-        <PlanBadge license={license} onClick={onPurchase} />
+        <PlanBadge license={license} onClick={onConnect} />
       </div>
 
       <div className="mb-3">
@@ -302,13 +346,36 @@ function Dashboard({
             Change key
           </button>
         </p>
+      ) : isConnected ? (
+        <div className="space-y-2 text-center text-[11px] text-ink-soft">
+          <p>
+            {license.userFullName ? `Connected as ${license.userFullName}` : 'CodersNexus connected'}
+            {license.planName ? ` - ${license.planName}` : ' - Starter'}
+          </p>
+          <button onClick={onPurchase} className="w-full text-center text-xs font-medium text-accent underline">
+            Buy or upgrade a plan
+          </button>
+          <button
+            className="w-full text-center text-xs font-medium text-accent underline"
+            onClick={() =>
+              chrome.runtime.sendMessage({ type: 'CLEAR_LICENSE' }, () => onLicenseChange(EMPTY_LICENSE_STATE))
+            }
+          >
+            Disconnect
+          </button>
+        </div>
       ) : (
         <div className="space-y-2">
           <button
-            onClick={onPurchase}
+            onClick={onConnect}
+            disabled={connectingAccount}
             className="w-full rounded bg-marker-yellow py-2 text-sm font-medium text-ink hover:brightness-95"
           >
-            Buy plan
+            {connectingAccount ? 'Connecting...' : 'Connect CodersNexus account'}
+          </button>
+          {authError && <p className="text-center text-xs text-red-600">{authError}</p>}
+          <button onClick={onPurchase} className="w-full text-center text-xs font-medium text-accent underline">
+            Buy or upgrade a plan
           </button>
           <button onClick={onRequestUpgrade} className="w-full text-center text-xs font-medium text-accent underline">
             Have a license key? Enter it here
@@ -329,12 +396,19 @@ function PlanBadge({ license, onClick }: { license: LicenseState; onClick: () =>
       </span>
     );
   }
+  if (license.key && license.userId) {
+    return (
+      <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent">
+        {license.planName ?? 'Starter'}
+      </span>
+    );
+  }
   return (
     <button
       onClick={onClick}
       className="rounded-full bg-marker-yellow px-2 py-0.5 text-[11px] font-medium text-ink hover:brightness-95"
     >
-      Free · Upgrade
+      Free · Sign in
     </button>
   );
 }
