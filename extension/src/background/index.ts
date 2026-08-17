@@ -2,7 +2,7 @@ import type { ExtensionMessage, LicenseState } from '@/types';
 import { EMPTY_LICENSE_STATE } from '@/types';
 import { activateLicense, reverifyStoredLicense } from './license';
 import { startExtensionAuth } from './extensionAuth';
-import { getLicenseState, clearLicenseState } from '@/storage/db';
+import { getLicenseState, clearLicenseState, getSettings } from '@/storage/db';
 import { syncAllHighlights, syncHighlight } from '@/sync/client';
 import { PURCHASE_URL } from '@/constants';
 
@@ -33,22 +33,27 @@ function scheduleSyncAll(options: { fullPull?: boolean } = {}) {
     .catch(() => undefined);
 }
 
-function canUseCloudSync(state: LicenseState) {
-  return Boolean(state.key && state.userId);
+async function canUseCloudSync(state: LicenseState) {
+  const settings = await getSettings();
+  return Boolean(settings.syncToCloud && state.key && state.userId);
+}
+
+async function scheduleSyncIfAllowed(state: LicenseState, options: { fullPull?: boolean } = {}) {
+  if (await canUseCloudSync(state)) scheduleSyncAll(options);
 }
 
 // ---- License re-verification cadence: on every browser start ----
 chrome.runtime.onStartup.addListener(async () => {
   const state = await reverifyStoredLicense();
   broadcastLicenseState(state);
-  if (canUseCloudSync(state)) scheduleSyncAll();
+  await scheduleSyncIfAllowed(state);
 });
 
 // Also check right after install/update, in case a key was already entered
 // before an update, or the service worker was asleep across a long session.
 chrome.runtime.onInstalled.addListener(() => {
   reverifyStoredLicense().then((state) => {
-    if (canUseCloudSync(state)) scheduleSyncAll();
+    void scheduleSyncIfAllowed(state);
   });
   setupContextMenus();
 });
@@ -78,11 +83,6 @@ function setupContextMenus() {
       title: 'Add note to selection',
       contexts: ['selection'],
     });
-    chrome.contextMenus.create({
-      id: 'nm-copy',
-      title: 'Copy selection',
-      contexts: ['selection'],
-    });
   });
 }
 
@@ -90,9 +90,6 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   if (info.menuItemId === 'nm-add-note') {
     chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_ADD_NOTE', selectionText: info.selectionText });
-  } else if (info.menuItemId === 'nm-copy') {
-    // Selection text is already on the OS clipboard via the browser's own
-    // native "Copy" — nothing to do; this entry mirrors the brief's UX list.
   } else if (typeof info.menuItemId === 'string' && info.menuItemId.startsWith('nm-highlight-')) {
     const color = info.menuItemId.replace('nm-highlight-', '');
     chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_HIGHLIGHT', color, selectionText: info.selectionText });
@@ -120,7 +117,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       case 'VERIFY_LICENSE': {
         const state = await activateLicense(message.key);
         broadcastLicenseState(state);
-        if (canUseCloudSync(state)) scheduleSyncAll({ fullPull: true });
+        await scheduleSyncIfAllowed(state, { fullPull: true });
         sendResponse(state);
         break;
       }
@@ -137,7 +134,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         try {
           const state = await startExtensionAuth();
           broadcastLicenseState(state);
-          if (canUseCloudSync(state)) scheduleSyncAll({ fullPull: true });
+          await scheduleSyncIfAllowed(state, { fullPull: true });
           sendResponse(state);
         } catch (error) {
           sendResponse({
@@ -149,15 +146,12 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         break;
       }
       case 'REVERIFY_LICENSE': {
-        // A LIVE network check, not just a cache read. Used by the popup
-        // every time it opens and right before a Pro-gated action (export),
-        // so a locally-tampered cache (e.g. hasAccess hand-edited in
-        // chrome.storage devtools) gets overwritten by the real server
-        // answer within seconds rather than persisting until next browser
-        // start. See README §4 "What server-side checking actually buys you".
+        // A live network check, not just a cache read. Used by the popup every
+        // time it opens and before Pro-gated actions, so local storage edits
+        // are overwritten by the real server answer quickly.
         const state = await reverifyStoredLicense();
         broadcastLicenseState(state);
-        if (canUseCloudSync(state)) scheduleSyncAll();
+        await scheduleSyncIfAllowed(state);
         sendResponse(state);
         break;
       }
@@ -180,7 +174,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       }
       case 'SYNC_ALL_HIGHLIGHTS': {
         try {
-          const pageIds = await syncAllHighlights();
+          const pageIds = await syncAllHighlights({ fullPull: message.fullPull });
           broadcastHighlightsUpdated(pageIds);
           sendResponse({ success: true });
         } catch {

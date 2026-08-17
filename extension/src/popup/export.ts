@@ -45,7 +45,7 @@ export function buildWordExport(highlights: Highlight[], pages: PageRecord[]): s
 <html>
 <head>
   <meta charset="utf-8">
-  <title>NoteMark Study Notes</title>
+  <title>Nexus Highlighter Study Notes</title>
   <style>
     body { font-family: Aptos, Calibri, Arial, sans-serif; color: #1f2933; line-height: 1.5; }
     h1 { font-size: 24pt; margin-bottom: 4pt; }
@@ -56,7 +56,7 @@ export function buildWordExport(highlights: Highlight[], pages: PageRecord[]): s
   </style>
 </head>
 <body>
-  <h1>NoteMark Study Notes</h1>
+  <h1>Nexus Highlighter Study Notes</h1>
   <p class="meta">Exported ${escapeHtml(new Date().toLocaleString())} - ${highlights.length} highlights</p>
   ${sections || '<p>No highlights to export.</p>'}
 </body>
@@ -89,7 +89,7 @@ export async function downloadPdfExport(highlights: Highlight[], pages: PageReco
     y += lines.length * (size + 4) + gap;
   }
 
-  writeText('NoteMark Study Notes', 22, 'bold', 8);
+  writeText('Nexus Highlighter Study Notes', 22, 'bold', 8);
   writeText(`Exported ${new Date().toLocaleString()} - ${highlights.length} highlights`, 9, 'normal', 24);
 
   if (highlights.length === 0) {
@@ -114,7 +114,7 @@ export async function downloadPdfExport(highlights: Highlight[], pages: PageReco
     });
   });
 
-  doc.save('notemark-study-notes.pdf');
+  doc.save('nexus-highlighter-study-notes.pdf');
 }
 
 export function downloadTextFile(filename: string, content: string, mimeType: string) {

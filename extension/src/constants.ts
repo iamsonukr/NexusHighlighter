@@ -8,7 +8,9 @@
  * Keep this list honest: only gate things that are actually implemented.
  * AI and collections are not built yet.
  */
-export const FREE_HIGHLIGHT_LIMIT = 2000;
+export const UNREGISTERED_HIGHLIGHT_LIMIT = 100;
+export const REGISTERED_HIGHLIGHT_LIMIT = 500;
+export const FREE_HIGHLIGHT_LIMIT = REGISTERED_HIGHLIGHT_LIMIT;
 
 // Percent-of-limit thresholds at which we start nudging toward upgrading,
 // so the first thing a near-limit user sees isn't a hard wall.

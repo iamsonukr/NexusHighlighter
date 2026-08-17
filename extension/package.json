@@ -1,7 +1,7 @@
 {
   "name": "notemark-extension",
   "version": "0.1.0",
-  "description": "NoteMark — highlight, annotate, and remember anything you read on the web.",
+  "description": "Nexus Highlighter - highlight, annotate, and remember anything you read on the web.",
   "private": true,
   "type": "module",
   "scripts": {

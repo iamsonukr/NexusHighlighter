@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Highlight, HighlightColor } from '@/types';
 import { HIGHLIGHT_COLORS } from '@/types';
 
@@ -18,12 +18,21 @@ interface SidebarProps {
   onRecolor: (id: string, color: HighlightColor) => void;
   onDelete: (id: string) => void;
   onSaveNote: (id: string, note: string) => void;
+  editingHighlightId?: string | null;
 }
 
-export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, onSaveNote }: SidebarProps) {
+export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, onSaveNote, editingHighlightId }: SidebarProps) {
   const [query, setQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
+
+  useEffect(() => {
+    if (!editingHighlightId) return;
+    const highlight = highlights.find((item) => item.id === editingHighlightId);
+    if (!highlight) return;
+    setEditingId(highlight.id);
+    setDraftNote(highlight.note ?? '');
+  }, [editingHighlightId, highlights]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -44,7 +53,7 @@ export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, on
           <p className="mt-1 text-xs text-ink-soft">{highlights.length} on this page</p>
         </div>
         <button onClick={onClose} className="rounded px-2 py-1 text-ink-soft hover:bg-accent-soft hover:text-ink">
-          ✕
+          x
         </button>
       </div>
 
@@ -52,7 +61,7 @@ export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, on
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search this page's highlights…"
+          placeholder="Search this page's highlights..."
           className="w-full rounded border border-rule bg-white px-3 py-1.5 text-sm outline-none focus:border-accent"
         />
       </div>
@@ -74,7 +83,7 @@ export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, on
                 className="block w-full text-left text-sm leading-snug"
                 style={{ borderLeft: `3px solid ${COLOR_HEX[h.color]}`, paddingLeft: 8 }}
               >
-                “{truncate(h.anchor.selectedText, 140)}”
+                "{truncate(h.anchor.selectedText, 140)}"
               </button>
 
               {editingId === h.id ? (
@@ -83,7 +92,7 @@ export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, on
                     autoFocus
                     value={draftNote}
                     onChange={(e) => setDraftNote(e.target.value)}
-                    placeholder="Add a note…"
+                    placeholder="Add a note..."
                     rows={2}
                     className="w-full rounded border border-rule px-2 py-1 text-xs outline-none focus:border-accent"
                   />
@@ -147,5 +156,5 @@ export function Sidebar({ highlights, onClose, onSelect, onRecolor, onDelete, on
 }
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return text.length > max ? `${text.slice(0, max)}...` : text;
 }

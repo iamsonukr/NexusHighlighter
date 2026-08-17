@@ -1,13 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Highlight, LicenseState } from '@/types';
-import { EMPTY_LICENSE_STATE } from '@/types';
-import { getStats, getHighlightsForPage, getAllHighlights, getAllPages, searchHighlights } from '@/storage/db';
+import { useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import type { Highlight, LicenseState, Settings } from '@/types';
+import { DEFAULT_SETTINGS, EMPTY_LICENSE_STATE } from '@/types';
+import {
+  deleteHighlight as deleteHighlightRecord,
+  getAllHighlights,
+  getHighlightsForPageIdentity,
+  getSettings,
+  getStats,
+  updateSettings,
+} from '@/storage/db';
 import { normalizeUrl, pageIdFor, getDomain } from '@/utils/url';
-import { FREE_HIGHLIGHT_LIMIT, HIGHLIGHT_WARNING_THRESHOLD, PURCHASE_URL } from '@/constants';
+import {
+  HIGHLIGHT_WARNING_THRESHOLD,
+  PURCHASE_URL,
+  REGISTERED_HIGHLIGHT_LIMIT,
+  UNREGISTERED_HIGHLIGHT_LIMIT,
+} from '@/constants';
 import { buildWordExport, downloadPdfExport, downloadTextFile } from './export';
 
 type Stats = Awaited<ReturnType<typeof getStats>>;
-type PremiumTooltipTarget = 'search' | 'export';
+type ViewMode = 'dashboard' | 'all';
+type SortMode = 'newest' | 'oldest';
 
 function openPurchasePage() {
   chrome.tabs.create({ url: PURCHASE_URL });
@@ -21,9 +35,33 @@ function startCodersNexusLogin(): Promise<LicenseState> {
         reject(new Error(error.message || 'Could not open CodersNexus login.'));
         return;
       }
+      if (!state) {
+        reject(new Error('The extension background worker did not respond. Reload Nexus Highlighter from chrome://extensions, then try again.'));
+        return;
+      }
       resolve(state ?? EMPTY_LICENSE_STATE);
     });
   });
+}
+
+function formatDate(timestamp: number) {
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(timestamp));
+}
+
+function getHighlightLimit(license: LicenseState) {
+  if (license.hasAccess) return Number.POSITIVE_INFINITY;
+  return license.key && license.userId ? REGISTERED_HIGHLIGHT_LIMIT : UNREGISTERED_HIGHLIGHT_LIMIT;
+}
+
+function getLimitLabel(limit: number) {
+  return Number.isFinite(limit) ? limit.toLocaleString() : 'Unlimited';
+}
+
+function formatExpiryDate(value: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(date);
 }
 
 export function Popup() {
@@ -34,19 +72,11 @@ export function Popup() {
   const [showKeyBox, setShowKeyBox] = useState(false);
 
   useEffect(() => {
-    // Live network re-check on every popup open — not a cached read. This is
-    // what actually closes the "hand-edit chrome.storage to fake Pro" hole:
-    // a tampered local hasAccess flag gets overwritten by the real server
-    // answer the next time the popup is opened, not just at browser start.
     chrome.runtime.sendMessage({ type: 'REVERIFY_LICENSE' }, (state: LicenseState) => {
       setLicense(state ?? EMPTY_LICENSE_STATE);
       setLoadingLicense(false);
     });
   }, []);
-
-  if (loadingLicense) {
-    return <div className="bg-paper p-6 text-sm text-ink-soft">Loading…</div>;
-  }
 
   async function connectAccount() {
     if (connectingAccount) return;
@@ -61,10 +91,18 @@ export function Popup() {
         setAuthError(state.message || 'CodersNexus did not return a valid extension token.');
       }
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : 'Could not connect CodersNexus.');
+      setAuthError(error instanceof Error ? error.message : 'Could not connect Nexus Highlighter.');
     } finally {
       setConnectingAccount(false);
     }
+  }
+
+  if (loadingLicense) {
+    return (
+      <div className="flex min-h-[420px] items-center justify-center bg-[#f6f3ee] font-body text-sm text-ink-soft">
+        Loading Nexus Highlighter...
+      </div>
+    );
   }
 
   return (
@@ -74,7 +112,7 @@ export function Popup() {
       connectingAccount={connectingAccount}
       showKeyBox={showKeyBox || (!license.userId && license.status === 'invalid')}
       onConnect={connectAccount}
-      onRequestUpgrade={() => setShowKeyBox(true)}
+      onRequestKey={() => setShowKeyBox(true)}
       onPurchase={openPurchasePage}
       onLicenseChange={(state) => {
         setLicense(state);
@@ -84,15 +122,13 @@ export function Popup() {
   );
 }
 
-// ---------------------------------------------------------------------------
-
 function Dashboard({
   license,
   authError,
   connectingAccount,
   showKeyBox,
   onConnect,
-  onRequestUpgrade,
+  onRequestKey,
   onPurchase,
   onLicenseChange,
 }: {
@@ -101,78 +137,71 @@ function Dashboard({
   connectingAccount: boolean;
   showKeyBox: boolean;
   onConnect: () => void;
-  onRequestUpgrade: () => void;
+  onRequestKey: () => void;
   onPurchase: () => void;
   onLicenseChange: (state: LicenseState) => void;
 }) {
-  const isPro = license.hasAccess;
-  const isConnected = Boolean(license.key && license.userId);
+  const [view, setView] = useState<ViewMode>('dashboard');
   const [stats, setStats] = useState<Stats | null>(null);
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [currentPageCount, setCurrentPageCount] = useState<number | null>(null);
-  const [currentDomain, setCurrentDomain] = useState<string>('');
+  const [currentDomain, setCurrentDomain] = useState('');
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Highlight[] | null>(null);
-  const [premiumTooltip, setPremiumTooltip] = useState<{ target: PremiumTooltipTarget; message: string } | null>(null);
-  const tooltipTimer = useRef<number | undefined>();
+  const [domainFilter, setDomainFilter] = useState('all');
+  const [sortMode, setSortMode] = useState<SortMode>('newest');
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [syncingNow, setSyncingNow] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    getStats().then(setStats);
+  const isRegistered = Boolean(license.key && license.userId);
+  const limit = getHighlightLimit(license);
+  const totalHighlights = stats?.totalHighlights ?? highlights.length;
+  const usageRatio = Number.isFinite(limit) ? Math.min(1, totalHighlights / limit) : 0;
+  const isNearLimit = Number.isFinite(limit) && usageRatio >= HIGHLIGHT_WARNING_THRESHOLD;
+  const isAtLimit = Number.isFinite(limit) && totalHighlights >= limit;
+  const recentHighlights = useMemo(
+    () => [...highlights].sort((a, b) => b.createdAt - a.createdAt).slice(0, 4),
+    [highlights]
+  );
+  const domains = useMemo(() => [...new Set(highlights.map((h) => h.domain).filter(Boolean))].sort(), [highlights]);
+  const filteredHighlights = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return highlights
+      .filter((highlight) => {
+        if (domainFilter !== 'all' && highlight.domain !== domainFilter) return false;
+        if (!normalizedQuery) return true;
+        return [highlight.anchor.selectedText, highlight.note ?? '', highlight.pageTitle, highlight.domain]
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery);
+      })
+      .sort((a, b) => (sortMode === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt));
+  }, [domainFilter, highlights, query, sortMode]);
+
+  async function loadDashboard() {
+    const [nextStats, nextHighlights, nextSettings] = await Promise.all([getStats(), getAllHighlights(), getSettings()]);
+    setStats(nextStats);
+    setHighlights(nextHighlights);
+    setSettings(nextSettings);
+
     chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
       if (!tab?.url) return;
       try {
-        const pageId = pageIdFor(normalizeUrl(tab.url));
-        const highlights = await getHighlightsForPage(pageId);
-        setCurrentPageCount(highlights.length);
+        const normalizedUrl = normalizeUrl(tab.url);
+        const pageId = pageIdFor(normalizedUrl);
+        const pageHighlights = await getHighlightsForPageIdentity(pageId, [normalizedUrl]);
+        setCurrentPageCount(pageHighlights.length);
         setCurrentDomain(getDomain(tab.url));
       } catch {
         setCurrentPageCount(0);
       }
     });
-  }, []);
+  }
 
   useEffect(() => {
-    return () => window.clearTimeout(tooltipTimer.current);
+    void loadDashboard();
   }, []);
-
-  function showPremiumTooltip(target: PremiumTooltipTarget, message: string) {
-    if (isPro) return;
-    window.clearTimeout(tooltipTimer.current);
-    setPremiumTooltip({ target, message });
-    tooltipTimer.current = window.setTimeout(() => setPremiumTooltip(null), 4000);
-  }
-
-  async function runSearch(q: string) {
-    setQuery(q);
-    if (!isPro) {
-      setResults(null); // free tier: per-page search lives in the sidebar instead
-      return;
-    }
-    if (!q.trim()) {
-      setResults(null);
-      return;
-    }
-    setResults(await searchHighlights(q));
-  }
-
-  async function exportAs(format: 'pdf' | 'doc') {
-    // Re-check live rather than trusting the license prop from when the
-    // popup opened — belt-and-braces for the one Pro action that actually
-    // writes a file to disk.
-    const fresh = await new Promise<LicenseState>((resolve) =>
-      chrome.runtime.sendMessage({ type: 'REVERIFY_LICENSE' }, resolve)
-    );
-    if (!fresh.hasAccess) {
-      onLicenseChange(fresh);
-      onRequestUpgrade();
-      return;
-    }
-    const [highlights, pages] = await Promise.all([getAllHighlights(), getAllPages()]);
-    if (format === 'pdf') {
-      await downloadPdfExport(highlights, pages);
-    } else {
-      downloadTextFile('notemark-study-notes.doc', buildWordExport(highlights, pages), 'application/msword');
-    }
-  }
 
   function openSidebar() {
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
@@ -180,236 +209,527 @@ function Dashboard({
     });
   }
 
-  const usageRatio = stats ? Math.min(1, stats.totalHighlights / FREE_HIGHLIGHT_LIMIT) : 0;
-  const nearLimit = !isPro && usageRatio >= HIGHLIGHT_WARNING_THRESHOLD;
+  async function exportAs(format: 'pdf' | 'doc') {
+    const fresh = await new Promise<LicenseState>((resolve) =>
+      chrome.runtime.sendMessage({ type: 'REVERIFY_LICENSE' }, resolve)
+    );
+    if (!fresh.hasAccess) {
+      onLicenseChange(fresh);
+      onPurchase();
+      return;
+    }
+
+    const allHighlights = await getAllHighlights();
+    if (format === 'pdf') {
+      await downloadPdfExport(allHighlights, []);
+    } else {
+      downloadTextFile('nexus-highlighter-notes.doc', buildWordExport(allHighlights, []), 'application/msword');
+    }
+  }
+
+  async function deleteHighlight(highlight: Highlight) {
+    const deleted = await deleteHighlightRecord(highlight.id);
+    if (deleted) {
+      chrome.runtime.sendMessage({ type: 'SYNC_HIGHLIGHT', highlight: deleted }, () => void chrome.runtime.lastError);
+    }
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHTS_UPDATED', pageId: highlight.pageId });
+    });
+    setStatusMessage('Highlight deleted.');
+    await loadDashboard();
+  }
+
+  function clearAccount() {
+    chrome.runtime.sendMessage({ type: 'CLEAR_LICENSE' }, () => onLicenseChange(EMPTY_LICENSE_STATE));
+  }
+
+  async function toggleCloudSync(enabled: boolean) {
+    const nextSettings = await updateSettings({ syncToCloud: enabled, syncPreferenceSet: true });
+    setSettings(nextSettings);
+    if (enabled) {
+      await syncNow();
+    } else {
+      setSyncMessage('Cloud sync is off.');
+    }
+  }
+
+  async function syncNow() {
+    if (syncingNow) return;
+    if (!license.key || !license.userId) {
+      setSyncMessage('Connect your account before syncing.');
+      return;
+    }
+
+    setSyncingNow(true);
+    setSyncMessage(null);
+    chrome.runtime.sendMessage({ type: 'SYNC_ALL_HIGHLIGHTS', fullPull: true }, (response: { success?: boolean } | undefined) => {
+      const error = chrome.runtime.lastError;
+      setSyncingNow(false);
+      if (error || !response?.success) {
+        setSyncMessage('Sync failed. Try again in a moment.');
+        return;
+      }
+      setSyncMessage('Synced to database.');
+    });
+  }
 
   return (
-    <div className="bg-paper p-4 font-body text-ink">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded bg-marker-yellow text-sm">✎</div>
-          <h1 className="font-display text-lg leading-none">NoteMark</h1>
+    <div className="min-h-[560px] bg-[#f6f3ee] font-body text-ink">
+      <div className="border-b border-[#ded7ca] bg-white px-4 py-3 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <ExtensionIcon className="h-9 w-9 rounded-lg shadow-card" />
+            <div>
+              <h1 className="text-[15px] font-bold leading-tight text-ink">Nexus Highlighter</h1>
+              <p className="text-[11px] font-medium text-ink-soft">Research notes, kept tidy</p>
+            </div>
+          </div>
+          <PlanBadge license={license} onClick={onConnect} />
         </div>
-        <PlanBadge license={license} onClick={onConnect} />
+
+        <div className="mt-3 grid grid-cols-2 rounded-lg bg-[#f0ece4] p-1 text-xs font-semibold">
+          <button
+            onClick={() => setView('dashboard')}
+            className={`rounded-md px-3 py-2 transition ${view === 'dashboard' ? 'bg-white text-ink shadow-card' : 'text-ink-soft hover:text-ink'}`}
+          >
+            Dashboard
+          </button>
+          <button
+            onClick={() => setView('all')}
+            className={`rounded-md px-3 py-2 transition ${view === 'all' ? 'bg-white text-ink shadow-card' : 'text-ink-soft hover:text-ink'}`}
+          >
+            All Highlights
+          </button>
+        </div>
       </div>
 
-      <div className="mb-3">
-        <input
-          value={query}
-          onChange={(e) => {
-            if (!isPro) {
-              showPremiumTooltip('search', 'Premium feature: buy a plan to search across every saved page.');
-              return;
-            }
-            runSearch(e.target.value);
-          }}
-          onFocus={() =>
-            !isPro && showPremiumTooltip('search', 'Premium feature: buy a plan to search across every saved page.')
-          }
-          onPointerDown={() =>
-            !isPro && showPremiumTooltip('search', 'Premium feature: buy a plan to search across every saved page.')
-          }
-          placeholder={isPro ? 'Search all your highlights…' : 'Search this page in the sidebar →'}
-          readOnly={!isPro}
-          aria-disabled={!isPro}
-          className={`w-full rounded border border-rule px-3 py-1.5 text-sm outline-none focus:border-accent ${
-            isPro ? 'bg-white' : 'cursor-not-allowed bg-rule/30 text-ink-soft'
-          }`}
-        />
-        {premiumTooltip?.target === 'search' && (
-          <PremiumTooltip
-            message={premiumTooltip.message}
+      <main className="max-h-[520px] overflow-y-auto px-4 py-4">
+        {view === 'dashboard' ? (
+          <DashboardView
+            authError={authError}
+            connectingAccount={connectingAccount}
+            currentDomain={currentDomain}
+            currentPageCount={currentPageCount}
+            isAtLimit={isAtLimit}
+            isNearLimit={isNearLimit}
+            isRegistered={isRegistered}
+            limit={limit}
+            license={license}
+            recentHighlights={recentHighlights}
+            stats={stats}
+            totalHighlights={totalHighlights}
+            usageRatio={usageRatio}
+            showKeyBox={showKeyBox}
+            settings={settings}
+            onConnect={onConnect}
+            onOpenAll={() => setView('all')}
+            onOpenSidebar={openSidebar}
             onPurchase={onPurchase}
-            onRequestUpgrade={onRequestUpgrade}
+            onRequestKey={onRequestKey}
+            onLicenseChange={onLicenseChange}
+            onDisconnect={clearAccount}
+            onExport={exportAs}
+            onToggleCloudSync={toggleCloudSync}
+            onSyncNow={syncNow}
+            syncingNow={syncingNow}
+            syncMessage={syncMessage}
+          />
+        ) : (
+          <AllHighlightsView
+            domains={domains}
+            domainFilter={domainFilter}
+            highlights={filteredHighlights}
+            query={query}
+            sortMode={sortMode}
+            statusMessage={statusMessage}
+            totalCount={highlights.length}
+            onDelete={deleteHighlight}
+            onDomainFilter={setDomainFilter}
+            onQuery={setQuery}
+            onSort={setSortMode}
           />
         )}
-        {!isPro && (
-          <p className="mt-1 text-[11px] text-ink-soft">
-            Searching across every saved page is a{' '}
-            <button className="font-medium text-accent underline" onClick={onPurchase}>
-              Pro
-            </button>{' '}
-            feature.
-          </p>
-        )}
-      </div>
+      </main>
+    </div>
+  );
+}
 
-      {results && (
-        <ul className="mb-3 max-h-40 space-y-1 overflow-y-auto rounded border border-rule bg-white p-2">
-          {results.length === 0 && <li className="p-1 text-xs text-ink-soft">No matches.</li>}
-          {results.map((h) => (
-            <li key={h.id}>
-              <button
-                className="block w-full truncate rounded px-1.5 py-1 text-left text-xs hover:bg-accent-soft"
-                title={h.anchor.selectedText}
-                onClick={() => chrome.tabs.create({ url: h.url })}
-              >
-                “{h.anchor.selectedText.slice(0, 60)}” <span className="text-ink-soft">· {h.domain}</span>
-              </button>
-            </li>
+function DashboardView({
+  authError,
+  connectingAccount,
+  currentDomain,
+  currentPageCount,
+  isAtLimit,
+  isNearLimit,
+  isRegistered,
+  limit,
+  license,
+  recentHighlights,
+  stats,
+  totalHighlights,
+  usageRatio,
+  showKeyBox,
+  settings,
+  onConnect,
+  onOpenAll,
+  onOpenSidebar,
+  onPurchase,
+  onRequestKey,
+  onLicenseChange,
+  onDisconnect,
+  onExport,
+  onToggleCloudSync,
+  onSyncNow,
+  syncingNow,
+  syncMessage,
+}: {
+  authError: string | null;
+  connectingAccount: boolean;
+  currentDomain: string;
+  currentPageCount: number | null;
+  isAtLimit: boolean;
+  isNearLimit: boolean;
+  isRegistered: boolean;
+  limit: number;
+  license: LicenseState;
+  recentHighlights: Highlight[];
+  stats: Stats | null;
+  totalHighlights: number;
+  usageRatio: number;
+  showKeyBox: boolean;
+  settings: Settings;
+  onConnect: () => void;
+  onOpenAll: () => void;
+  onOpenSidebar: () => void;
+  onPurchase: () => void;
+  onRequestKey: () => void;
+  onLicenseChange: (state: LicenseState) => void;
+  onDisconnect: () => void;
+  onExport: (format: 'pdf' | 'doc') => void;
+  onToggleCloudSync: (enabled: boolean) => void;
+  onSyncNow: () => void;
+  syncingNow: boolean;
+  syncMessage: string | null;
+}) {
+  return (
+    <div className="space-y-4">
+      <section className="rounded-lg border border-[#ded7ca] bg-white p-4 shadow-card">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-bold uppercase text-accent">Highlight Library</p>
+            <p className="mt-1 text-2xl font-bold leading-none text-ink">{totalHighlights.toLocaleString()}</p>
+            <p className="mt-1 text-xs text-ink-soft">saved highlights across {stats?.totalWebsites ?? 0} sources</p>
+          </div>
+          <div className="rounded-lg bg-[#eef0fa] px-3 py-2 text-right">
+            <p className="text-[11px] font-semibold text-accent">This page</p>
+            <p className="text-lg font-bold text-ink">{currentPageCount ?? 0}</p>
+          </div>
+        </div>
+
+        <UsageMeter
+          limit={limit}
+          total={totalHighlights}
+          usageRatio={usageRatio}
+          isNearLimit={isNearLimit}
+          isAtLimit={isAtLimit}
+        />
+
+        {!license.hasAccess && !isRegistered && (
+          <LimitPrompt
+            authError={authError}
+            connectingAccount={connectingAccount}
+            isAtLimit={isAtLimit}
+            isNearLimit={isNearLimit}
+            onConnect={onConnect}
+          />
+        )}
+
+        {!license.hasAccess && isRegistered && isAtLimit && (
+          <div className="mt-3 rounded-lg border border-[#f2c48d] bg-[#fff7ed] p-3 text-xs text-[#8a4b08]">
+            You have reached {REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} free highlights. Upgrade when you are ready for a larger research library.
+            <button onClick={onPurchase} className="mt-2 block font-bold text-[#7a3e00] underline">
+              View upgrade options
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className="grid grid-cols-3 gap-2">
+        <Metric label="Notes" value={stats?.totalNotes ?? 0} tone="green" />
+        <Metric label="This week" value={stats?.highlightsThisWeek ?? 0} tone="blue" />
+        <Metric label="Sources" value={stats?.totalWebsites ?? 0} tone="rose" />
+      </section>
+
+      <section className="rounded-lg border border-[#ded7ca] bg-white p-3 shadow-card">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-bold text-ink">Quick actions</p>
+            <p className="text-[11px] text-ink-soft">{currentDomain || 'Current tab tools'}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <ActionButton label="Open sidebar" icon={<PanelIcon />} onClick={onOpenSidebar} />
+          <ActionButton label="All highlights" icon={<ListIcon />} onClick={onOpenAll} />
+          <ActionButton label="Pricing plans" icon={<PriceTagIcon />} onClick={onPurchase} />
+          <ActionButton label="Export PDF" icon={<DownloadIcon />} locked={!license.hasAccess} onClick={license.hasAccess ? () => onExport('pdf') : onPurchase} />
+          <ActionButton label="Export Docs" icon={<DocumentIcon />} locked={!license.hasAccess} onClick={license.hasAccess ? () => onExport('doc') : onPurchase} />
+        </div>
+        {!license.hasAccess && (
+          <p className="mt-2 text-[11px] text-ink-soft">Exports are available with a paid plan. Your free library stays fully manageable here.</p>
+        )}
+      </section>
+
+      {recentHighlights.length ? (
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-bold text-ink">Recent highlights</p>
+            <button onClick={onOpenAll} className="text-xs font-bold text-accent hover:underline">
+              Manage all
+            </button>
+          </div>
+          {recentHighlights.map((highlight) => (
+            <HighlightCard key={highlight.id} highlight={highlight} compact />
           ))}
-        </ul>
-      )}
-
-      <div className="mb-3 grid grid-cols-3 gap-2 text-center">
-        <StatBox label="Highlights" value={stats?.totalHighlights} />
-        <StatBox label="Notes" value={stats?.totalNotes} />
-        <StatBox label="Sites" value={stats?.totalWebsites} />
-      </div>
-
-      {!isPro && stats && (
-        <div className="mb-3">
-          <div className="mb-1 flex items-center justify-between text-[11px] text-ink-soft">
-            <span>Free plan usage</span>
-            <span>
-              {stats.totalHighlights}/{FREE_HIGHLIGHT_LIMIT}
-            </span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-rule">
-            <div
-              className={`h-full rounded-full ${nearLimit ? 'bg-marker-orange' : 'bg-accent'}`}
-              style={{ width: `${usageRatio * 100}%` }}
-            />
-          </div>
-          {nearLimit && (
-            <p className="mt-1 text-[11px] text-marker-orange">
-              Almost at your free limit —{' '}
-              <button className="underline" onClick={onPurchase}>
-                buy a plan
-              </button>
-              .
-            </p>
-          )}
-        </div>
-      )}
-
-      <div className="mb-3 rounded-lg border border-rule bg-white p-3 shadow-card">
-        <p className="text-xs font-medium text-ink-soft">Current page{currentDomain ? ` · ${currentDomain}` : ''}</p>
-        <p className="mt-1 font-display text-xl">
-          {currentPageCount ?? '–'} <span className="text-sm font-body text-ink-soft">highlights</span>
-        </p>
-      </div>
-
-      <button
-        onClick={openSidebar}
-        className="mb-2 w-full rounded bg-accent py-2 text-sm font-medium text-white hover:bg-accent/90"
-      >
-        Open sidebar on this page
-      </button>
-
-      <div className="mb-2 grid grid-cols-2 gap-2">
-        <ExportButton
-          label="Export PDF"
-          locked={!isPro}
-          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export PDF or Word notes.')}
-          onClick={() => exportAs('pdf')}
-        />
-        <ExportButton
-          label="Export Docs"
-          locked={!isPro}
-          onLockedAttempt={() => showPremiumTooltip('export', 'Premium feature: buy a plan to export PDF or Word notes.')}
-          onClick={() => exportAs('doc')}
-        />
-      </div>
-      {premiumTooltip?.target === 'export' && (
-        <div className="-mt-2 mb-3">
-          <PremiumTooltip
-            message={premiumTooltip.message}
-            onPurchase={onPurchase}
-            onRequestUpgrade={onRequestUpgrade}
-          />
-        </div>
-      )}
-      {!isPro && (
-        <p className="-mt-2 mb-3 text-[11px] text-ink-soft">
-          PDF and Docs export are{' '}
-          <button className="font-medium text-accent underline" onClick={onPurchase}>
-            Pro
-          </button>{' '}
-          features.
-        </p>
+        </section>
+      ) : (
+        <EmptyState onOpenSidebar={onOpenSidebar} />
       )}
 
       {showKeyBox ? (
         <LicenseBox license={license} onPurchase={onPurchase} onChange={onLicenseChange} />
-      ) : isPro ? (
-        <p className="text-center text-[11px] text-ink-soft">
-          {license.userFullName ? `Licensed to ${license.userFullName}` : 'Pro'}
-          {license.planName ? ` · ${license.planName}` : ''}
-          {' · '}
-          <button
-            className="underline"
-            onClick={() =>
-              chrome.runtime.sendMessage({ type: 'CLEAR_LICENSE' }, () => onLicenseChange(EMPTY_LICENSE_STATE))
-            }
-          >
-            Change key
-          </button>
-        </p>
-      ) : isConnected ? (
-        <div className="space-y-2 text-center text-[11px] text-ink-soft">
-          <p>
-            {license.userFullName ? `Connected as ${license.userFullName}` : 'CodersNexus connected'}
-            {license.planName ? ` - ${license.planName}` : ' - Starter'}
-          </p>
-          <button onClick={onPurchase} className="w-full text-center text-xs font-medium text-accent underline">
-            Buy or upgrade a plan
-          </button>
-          <button
-            className="w-full text-center text-xs font-medium text-accent underline"
-            onClick={() =>
-              chrome.runtime.sendMessage({ type: 'CLEAR_LICENSE' }, () => onLicenseChange(EMPTY_LICENSE_STATE))
-            }
-          >
-            Disconnect
-          </button>
-        </div>
+      ) : license.key && license.userId ? (
+        <AccountPanel
+          license={license}
+          settings={settings}
+          onDisconnect={onDisconnect}
+          onPurchase={onPurchase}
+          onToggleCloudSync={onToggleCloudSync}
+          onSyncNow={onSyncNow}
+          syncingNow={syncingNow}
+          syncMessage={syncMessage}
+        />
       ) : (
-        <div className="space-y-2">
-          <button
-            onClick={onConnect}
-            disabled={connectingAccount}
-            className="w-full rounded bg-marker-yellow py-2 text-sm font-medium text-ink hover:brightness-95"
+        <button onClick={onRequestKey} className="w-full text-center text-xs font-bold text-accent underline">
+          Have a license key? Enter it here
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AllHighlightsView({
+  domains,
+  domainFilter,
+  highlights,
+  query,
+  sortMode,
+  statusMessage,
+  totalCount,
+  onDelete,
+  onDomainFilter,
+  onQuery,
+  onSort,
+}: {
+  domains: string[];
+  domainFilter: string;
+  highlights: Highlight[];
+  query: string;
+  sortMode: SortMode;
+  statusMessage: string | null;
+  totalCount: number;
+  onDelete: (highlight: Highlight) => void;
+  onDomainFilter: (domain: string) => void;
+  onQuery: (query: string) => void;
+  onSort: (sort: SortMode) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <section>
+        <div className="flex items-end justify-between">
+          <div>
+            <h2 className="text-base font-bold text-ink">All Highlights</h2>
+            <p className="text-xs text-ink-soft">{highlights.length} visible from {totalCount} saved</p>
+          </div>
+          {statusMessage && <span className="rounded bg-[#e8f6ee] px-2 py-1 text-[11px] font-semibold text-[#267344]">{statusMessage}</span>}
+        </div>
+      </section>
+
+      <section className="space-y-2 rounded-lg border border-[#ded7ca] bg-white p-3 shadow-card">
+        <div className="relative">
+          <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-soft" />
+          <input
+            value={query}
+            onChange={(event) => onQuery(event.target.value)}
+            placeholder="Search text, notes, page, or website"
+            className="h-10 w-full rounded-lg border border-[#ded7ca] bg-[#fbfaf7] pl-9 pr-3 text-sm outline-none transition focus:border-accent focus:bg-white focus:ring-4 focus:ring-accent/10"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <select
+            value={domainFilter}
+            onChange={(event) => onDomainFilter(event.target.value)}
+            className="h-9 rounded-lg border border-[#ded7ca] bg-[#fbfaf7] px-2 text-xs font-semibold outline-none focus:border-accent"
           >
-            {connectingAccount ? 'Connecting...' : 'Connect CodersNexus account'}
-          </button>
-          {authError && <p className="text-center text-xs text-red-600">{authError}</p>}
-          <button onClick={onPurchase} className="w-full text-center text-xs font-medium text-accent underline">
-            Buy or upgrade a plan
-          </button>
-          <button onClick={onRequestUpgrade} className="w-full text-center text-xs font-medium text-accent underline">
-            Have a license key? Enter it here
-          </button>
+            <option value="all">All websites</option>
+            {domains.map((domain) => (
+              <option key={domain} value={domain}>
+                {domain}
+              </option>
+            ))}
+          </select>
+          <select
+            value={sortMode}
+            onChange={(event) => onSort(event.target.value as SortMode)}
+            className="h-9 rounded-lg border border-[#ded7ca] bg-[#fbfaf7] px-2 text-xs font-semibold outline-none focus:border-accent"
+          >
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+          </select>
+        </div>
+      </section>
+
+      {highlights.length ? (
+        <section className="space-y-2">
+          {highlights.map((highlight) => (
+            <HighlightCard key={highlight.id} highlight={highlight} onDelete={() => onDelete(highlight)} />
+          ))}
+        </section>
+      ) : (
+        <div className="rounded-lg border border-dashed border-[#cfc6b7] bg-white p-6 text-center shadow-card">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg bg-[#eef0fa] text-accent">
+            <SearchIcon className="h-5 w-5" />
+          </div>
+          <p className="mt-3 text-sm font-bold text-ink">No matching highlights</p>
+          <p className="mt-1 text-xs leading-5 text-ink-soft">Try a different search, website filter, or sort order.</p>
         </div>
       )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-
-function PlanBadge({ license, onClick }: { license: LicenseState; onClick: () => void }) {
-  if (license.hasAccess) {
-    return (
-      <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent">
-        {license.planName ?? 'Pro'}
-      </span>
-    );
-  }
-  if (license.key && license.userId) {
-    return (
-      <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent">
-        {license.planName ?? 'Starter'}
-      </span>
-    );
-  }
+function HighlightCard({ highlight, compact = false, onDelete }: { highlight: Highlight; compact?: boolean; onDelete?: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      className="rounded-full bg-marker-yellow px-2 py-0.5 text-[11px] font-medium text-ink hover:brightness-95"
-    >
-      Free · Sign in
-    </button>
+    <article className="rounded-lg border border-[#ded7ca] bg-white p-3 shadow-card transition duration-150 hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-toolbar">
+      <p className={`${compact ? 'line-clamp-2' : ''} text-sm font-semibold leading-5 text-ink`}>
+        {highlight.anchor.selectedText}
+      </p>
+      {highlight.note && <p className="mt-2 rounded-md bg-[#fff7d6] px-2 py-1.5 text-xs leading-5 text-[#594600]">{highlight.note}</p>}
+      <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-ink-soft">
+        <div className="min-w-0">
+          <p className="truncate font-bold text-ink">{highlight.pageTitle || highlight.domain || 'Saved page'}</p>
+          <p className="truncate">{highlight.domain} - {formatDate(highlight.createdAt)}</p>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          <IconButton label="Open original page" onClick={() => chrome.tabs.create({ url: highlight.url })}>
+            <OpenIcon />
+          </IconButton>
+          {onDelete && (
+            <IconButton label="Delete highlight" danger onClick={onDelete}>
+              <TrashIcon />
+            </IconButton>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function UsageMeter({
+  limit,
+  total,
+  usageRatio,
+  isNearLimit,
+  isAtLimit,
+}: {
+  limit: number;
+  total: number;
+  usageRatio: number;
+  isNearLimit: boolean;
+  isAtLimit: boolean;
+}) {
+  if (!Number.isFinite(limit)) {
+    return (
+      <div className="mt-4 rounded-lg border border-[#d5eadc] bg-[#f0fbf4] px-3 py-2">
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="font-bold text-[#267344]">Unlimited highlights available</span>
+          <span className="font-bold text-ink">{total.toLocaleString()} saved</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 flex items-center justify-between text-xs">
+        <span className="font-bold text-ink">Usage</span>
+        <span className={`font-bold ${isAtLimit ? 'text-[#b42318]' : isNearLimit ? 'text-[#9a5b00]' : 'text-ink-soft'}`}>
+          {total.toLocaleString()} / {getLimitLabel(limit)} highlights
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-[#e6ded1]">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${isAtLimit ? 'bg-[#d92d20]' : isNearLimit ? 'bg-[#f79009]' : 'bg-accent'}`}
+          style={{ width: `${Number.isFinite(limit) ? usageRatio * 100 : 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LimitPrompt({
+  authError,
+  connectingAccount,
+  isAtLimit,
+  isNearLimit,
+  onConnect,
+}: {
+  authError: string | null;
+  connectingAccount: boolean;
+  isAtLimit: boolean;
+  isNearLimit: boolean;
+  onConnect: () => void;
+}) {
+  if (!isAtLimit && !isNearLimit) {
+    return (
+      <div className="mt-3 rounded-lg bg-[#eef0fa] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-semibold leading-5 text-ink">
+            Register free to raise your limit from {UNREGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} to {REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} highlights.
+          </p>
+          <button onClick={onConnect} disabled={connectingAccount} className="shrink-0 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white transition hover:bg-[#263d86] disabled:opacity-60">
+            {connectingAccount ? 'Opening...' : `Unlock ${REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} Free`}
+          </button>
+        </div>
+        {authError && <p className="mt-2 text-xs font-semibold text-[#b42318]">{authError}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-[#f2c48d] bg-[#fff7ed] p-3">
+      <p className="text-xs font-semibold leading-5 text-[#8a4b08]">
+        {isAtLimit
+          ? `You have reached ${UNREGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} highlights. Register free to continue saving up to ${REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()}.`
+          : `You are close to ${UNREGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} highlights. Register free before you hit the limit.`}
+      </p>
+      <button onClick={onConnect} disabled={connectingAccount} className="mt-2 w-full rounded-lg bg-[#f79009] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#d97904] disabled:opacity-60">
+        {connectingAccount ? 'Opening secure login...' : `Increase Limit to ${REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} - Free`}
+      </button>
+      {authError && <p className="mt-2 text-xs font-semibold text-[#b42318]">{authError}</p>}
+    </div>
+  );
+}
+
+function EmptyState({ onOpenSidebar }: { onOpenSidebar: () => void }) {
+  return (
+    <section className="rounded-lg border border-dashed border-[#cfc6b7] bg-white p-6 text-center shadow-card">
+      <ExtensionIcon className="mx-auto h-12 w-12 rounded-lg shadow-card" />
+      <h2 className="mt-3 text-base font-bold text-ink">Build your research library</h2>
+      <p className="mt-1 text-xs leading-5 text-ink-soft">Select text on any page, save it as a highlight, then manage everything from here.</p>
+      <button onClick={onOpenSidebar} className="mt-4 rounded-lg bg-ink px-4 py-2 text-xs font-bold text-white transition hover:bg-black">
+        Open sidebar
+      </button>
+    </section>
   );
 }
 
@@ -441,93 +761,284 @@ function LicenseBox({
   }
 
   return (
-    <div className="rounded-lg border border-rule bg-white p-3 shadow-card">
-      <label className="mb-1 block text-xs font-medium text-ink-soft">License key</label>
+    <section className="rounded-lg border border-[#ded7ca] bg-white p-3 shadow-card">
+      <label className="mb-1 block text-xs font-bold text-ink">License key</label>
       <input
         value={key}
-        onChange={(e) => setKey(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && submit()}
+        onChange={(event) => setKey(event.target.value)}
+        onKeyDown={(event) => event.key === 'Enter' && submit()}
         placeholder="XXXX-XXXX-XXXX-XXXX"
-        className="w-full rounded border border-rule px-3 py-2 text-sm outline-none focus:border-accent"
+        className="h-10 w-full rounded-lg border border-[#ded7ca] bg-[#fbfaf7] px-3 text-sm outline-none transition focus:border-accent focus:bg-white focus:ring-4 focus:ring-accent/10"
         autoFocus
       />
-      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+      {error && <p className="mt-2 text-xs font-semibold text-[#b42318]">{error}</p>}
       <button
         onClick={submit}
         disabled={submitting || !key.trim()}
-        className="mt-2 w-full rounded bg-accent py-2 text-sm font-medium text-white disabled:opacity-50"
+        className="mt-2 w-full rounded-lg bg-accent py-2 text-xs font-bold text-white transition hover:bg-[#263d86] disabled:opacity-50"
       >
-        {submitting ? 'Verifying…' : 'Activate'}
+        {submitting ? 'Verifying...' : 'Activate key'}
       </button>
-      <p className="mt-2 text-center text-[11px] text-ink-soft">
-        Need a key?{' '}
-        <button className="font-medium text-accent underline" onClick={onPurchase}>
-          Buy plan
-        </button>
-        . Activation only checks whether your key is active.
-      </p>
-    </div>
+      <button className="mt-2 w-full text-center text-xs font-bold text-accent underline" onClick={onPurchase}>
+        Buy or upgrade a plan
+      </button>
+    </section>
   );
 }
 
-function StatBox({ label, value }: { label: string; value: number | undefined }) {
-  return (
-    <div className="rounded-lg border border-rule bg-white py-2 shadow-card">
-      <div className="font-display text-lg leading-none">{value ?? '–'}</div>
-      <div className="mt-1 text-[10px] uppercase tracking-wide text-ink-soft">{label}</div>
-    </div>
-  );
-}
-
-function PremiumTooltip({
-  message,
+function AccountPanel({
+  license,
+  settings,
+  onDisconnect,
   onPurchase,
-  onRequestUpgrade,
+  onToggleCloudSync,
+  onSyncNow,
+  syncingNow,
+  syncMessage,
 }: {
-  message: string;
+  license: LicenseState;
+  settings: Settings;
+  onDisconnect: () => void;
   onPurchase: () => void;
-  onRequestUpgrade: () => void;
+  onToggleCloudSync: (enabled: boolean) => void;
+  onSyncNow: () => void;
+  syncingNow: boolean;
+  syncMessage: string | null;
 }) {
+  const expiresOn = formatExpiryDate(license.expiresAt);
+
   return (
-    <div
-      role="tooltip"
-      className="mt-2 rounded border border-accent/30 bg-accent-soft px-3 py-2 text-[11px] leading-snug text-ink shadow-card"
-    >
-      <p>{message}</p>
-      <div className="mt-2 flex gap-3">
-        <button className="font-medium text-accent underline" onClick={onPurchase}>
-          Buy plan
-        </button>
-        <button className="font-medium text-accent underline" onClick={onRequestUpgrade}>
-          Enter key
+    <section className="rounded-lg border border-[#ded7ca] bg-white p-3 text-xs shadow-card">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-bold text-ink">{license.userFullName || 'Registered account'}</p>
+          <p className="text-ink-soft">{license.planName || 'Starter'} plan</p>
+          <p className="mt-0.5 text-[11px] font-semibold text-ink-soft">
+            {expiresOn ? `Expires on ${expiresOn}` : 'No expiry date available'}
+          </p>
+        </div>
+        <button onClick={onDisconnect} className="rounded-md px-2 py-1 font-bold text-ink-soft transition hover:bg-[#f0ece4] hover:text-ink">
+          Disconnect
         </button>
       </div>
+      <button onClick={onPurchase} className="mt-2 w-full rounded-lg border border-[#ded7ca] bg-[#fbfaf7] px-3 py-2 font-bold text-ink transition hover:border-accent/40 hover:bg-white hover:text-accent">
+        Pricing plans
+      </button>
+      <label className="mt-2 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[#ded7ca] bg-[#fbfaf7] px-3 py-2">
+        <span>
+          <span className="block font-bold text-ink">Cloud sync</span>
+          <span className="block text-[11px] leading-4 text-ink-soft">Save highlights to your CodersNexus account.</span>
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.syncToCloud}
+          onChange={(event) => onToggleCloudSync(event.target.checked)}
+          className="h-4 w-4 accent-[#3450a3]"
+        />
+      </label>
+      <button
+        onClick={onSyncNow}
+        disabled={!settings.syncToCloud || syncingNow}
+        className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-accent px-3 py-2 font-bold text-white transition hover:bg-[#263d86] disabled:cursor-not-allowed disabled:bg-[#b8becf] disabled:text-white/80"
+      >
+        <SyncIcon className={syncingNow ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+        {syncingNow ? 'Syncing...' : 'Sync now'}
+      </button>
+      {!settings.syncToCloud && (
+        <p className="mt-1 text-[11px] font-semibold text-ink-soft">Enable Cloud sync to save highlights to the database.</p>
+      )}
+      {syncMessage && <p className="mt-1 text-[11px] font-semibold text-ink-soft">{syncMessage}</p>}
+      {!license.hasAccess && (
+        <button onClick={onPurchase} className="mt-2 w-full rounded-lg bg-ink px-3 py-2 font-bold text-white transition hover:bg-black">
+          Upgrade for exports
+        </button>
+      )}
+    </section>
+  );
+}
+
+function Metric({ label, value, tone }: { label: string; value: number; tone: 'green' | 'blue' | 'rose' }) {
+  const tones = {
+    green: 'bg-[#e8f6ee] text-[#267344]',
+    blue: 'bg-[#eef0fa] text-accent',
+    rose: 'bg-[#fff0f3] text-[#b4234b]',
+  };
+  return (
+    <div className={`rounded-lg p-3 text-center shadow-card ${tones[tone]}`}>
+      <p className="text-lg font-bold leading-none">{value.toLocaleString()}</p>
+      <p className="mt-1 text-[10px] font-bold uppercase">{label}</p>
     </div>
   );
 }
 
-function ExportButton({
+function PlanBadge({ license, onClick }: { license: LicenseState; onClick: () => void }) {
+  if (license.hasAccess) {
+    return <span className="rounded-full bg-[#e8f6ee] px-3 py-1 text-[11px] font-bold text-[#267344]">Pro</span>;
+  }
+  if (license.key && license.userId) {
+    return <span className="rounded-full bg-[#eef0fa] px-3 py-1 text-[11px] font-bold text-accent">Free {REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()}</span>;
+  }
+  return (
+    <button onClick={onClick} className="rounded-full bg-[#fff3bf] px-3 py-1 text-[11px] font-bold text-[#594600] transition hover:bg-[#ffe889]">
+      Free {UNREGISTERED_HIGHLIGHT_LIMIT.toLocaleString()}
+    </button>
+  );
+}
+
+function ActionButton({
+  icon,
   label,
-  locked,
-  onLockedAttempt,
+  locked = false,
   onClick,
 }: {
+  icon: ReactNode;
   label: string;
-  locked: boolean;
-  onLockedAttempt: () => void;
+  locked?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
-      onClick={locked ? onLockedAttempt : onClick}
-      onFocus={() => locked && onLockedAttempt()}
+      onClick={onClick}
       aria-disabled={locked}
-      title={locked ? 'Premium feature' : undefined}
-      className={`flex-1 rounded border border-rule bg-white py-1.5 text-xs font-medium hover:bg-accent-soft ${
-        locked ? 'cursor-not-allowed text-ink-soft hover:bg-white' : 'text-ink'
+      title={locked ? 'Premium feature - opens pricing' : label}
+      className={`group relative flex h-10 items-center justify-center gap-2 rounded-lg border px-2 text-xs font-bold transition ${
+        locked
+          ? 'border-[#ded7ca] bg-[#f0ece4] text-ink-soft hover:-translate-y-0.5 hover:border-[#f79009] hover:bg-[#fff7ed] hover:text-[#8a4b08] focus:border-[#f79009] focus:outline-none focus:ring-4 focus:ring-[#f79009]/15'
+          : 'border-[#ded7ca] bg-[#fbfaf7] text-ink hover:-translate-y-0.5 hover:border-accent/40 hover:bg-white hover:text-accent'
       }`}
     >
-      {locked ? `Locked ${label}` : label}
+      {icon}
+      {label}
+      {locked && (
+        <span className="pointer-events-none absolute -top-8 left-1/2 z-10 w-max -translate-x-1/2 rounded-md bg-ink px-2 py-1 text-[11px] font-bold text-white opacity-0 shadow-toolbar transition group-hover:opacity-100 group-focus:opacity-100">
+          Premium feature
+        </span>
+      )}
     </button>
+  );
+}
+
+function IconButton({
+  children,
+  danger = false,
+  label,
+  onClick,
+}: {
+  children: ReactNode;
+  danger?: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className={`flex h-8 w-8 items-center justify-center rounded-md border transition hover:-translate-y-0.5 ${
+        danger
+          ? 'border-[#ffd7d3] bg-[#fff1f0] text-[#b42318] hover:bg-[#ffe4e0]'
+          : 'border-[#ded7ca] bg-[#fbfaf7] text-ink-soft hover:border-accent/40 hover:text-accent'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function ExtensionIcon({ className }: { className: string }) {
+  return <img src={chrome.runtime.getURL('public/icons/icon48.png')} alt="" className={className} />;
+}
+
+function SearchIcon({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  );
+}
+
+function OpenIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M14 4h6v6" />
+      <path d="M10 14 20 4" />
+      <path d="M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v5" />
+      <path d="M14 11v5" />
+    </svg>
+  );
+}
+
+function PanelIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 5h16v14H4z" />
+      <path d="M9 5v14" />
+    </svg>
+  );
+}
+
+function ListIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M8 6h13" />
+      <path d="M8 12h13" />
+      <path d="M8 18h13" />
+      <path d="M3 6h.01" />
+      <path d="M3 12h.01" />
+      <path d="M3 18h.01" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
+}
+
+function DocumentIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M7 3h7l5 5v13H7z" />
+      <path d="M14 3v6h5" />
+      <path d="M10 13h6" />
+      <path d="M10 17h6" />
+    </svg>
+  );
+}
+
+function PriceTagIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M20 10 12 2H5a3 3 0 0 0-3 3v7l8 8a3 3 0 0 0 4.2 0l5.8-5.8a3 3 0 0 0 0-4.2Z" />
+      <path d="M7.5 7.5h.01" />
+    </svg>
+  );
+}
+
+function SyncIcon({ className = 'h-4 w-4' }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 12a9 9 0 0 1-15.5 6.2" />
+      <path d="M3 12A9 9 0 0 1 18.5 5.8" />
+      <path d="M18 2v4h4" />
+      <path d="M6 22v-4H2" />
+    </svg>
   );
 }

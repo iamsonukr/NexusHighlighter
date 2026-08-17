@@ -69,13 +69,15 @@ export interface PageRecord {
 export interface Settings {
   defaultColor: HighlightColor;
   syncToCloud: boolean;
+  syncPreferenceSet: boolean;
   allowAnalytics: boolean;
   aiFeaturesEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   defaultColor: 'yellow',
-  syncToCloud: false,
+  syncToCloud: true,
+  syncPreferenceSet: false,
   allowAnalytics: false,
   aiFeaturesEnabled: false,
 };
@@ -93,7 +95,7 @@ export type ExtensionMessage =
   | { type: 'REVERIFY_LICENSE' }
   | { type: 'CLEAR_LICENSE' }
   | { type: 'SYNC_HIGHLIGHT'; highlight: Highlight }
-  | { type: 'SYNC_ALL_HIGHLIGHTS' }
+  | { type: 'SYNC_ALL_HIGHLIGHTS'; fullPull?: boolean }
   | { type: 'LICENSE_UPDATED'; state: LicenseState };
 
 // ---------- Licensing ----------

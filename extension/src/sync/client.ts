@@ -3,12 +3,13 @@ import {
   getAllHighlightRecords,
   getHighlightRecordMap,
   getLicenseState,
+  getSettings,
   upsertHighlight as saveHighlight,
   upsertPage,
 } from '@/storage/db';
 import { getDomain } from '@/utils/url';
 
-const SYNC_API_BASE_URL = (import.meta.env.VITE_NOTEMARK_SYNC_API_URL || 'http://localhost:5000/api').replace(
+const SYNC_API_BASE_URL = (import.meta.env.VITE_NOTEMARK_SYNC_API_URL || 'https://nexushighlighter.onrender.com/api').replace(
   /\/+$/,
   ''
 );
@@ -91,7 +92,8 @@ function safeStorageKeyPart(value: string): string {
 }
 
 async function getSyncIdentity(): Promise<SyncIdentity | null> {
-  const state = await getLicenseState();
+  const [state, settings] = await Promise.all([getLicenseState(), getSettings()]);
+  if (!settings.syncToCloud) return null;
   if (!state.key || !state.userId) return null;
 
   return {

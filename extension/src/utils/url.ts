@@ -22,6 +22,21 @@ export function getCanonicalUrl(doc: Document = document): string {
   return normalizeUrl(doc.location.href);
 }
 
+export function getPageUrlCandidates(doc: Document = document): string[] {
+  const candidates = new Set<string>();
+  try {
+    candidates.add(getCanonicalUrl(doc));
+  } catch {
+    // Ignore and fall through to location-based normalization.
+  }
+  try {
+    candidates.add(normalizeUrl(doc.location.href));
+  } catch {
+    candidates.add(doc.location.href);
+  }
+  return [...candidates].filter(Boolean);
+}
+
 export function normalizeUrl(rawUrl: string): string {
   const url = new URL(rawUrl);
   const params = url.searchParams;

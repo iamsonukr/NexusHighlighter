@@ -55,6 +55,13 @@ async function exchangeCode(code: string): Promise<ExtensionTokenResponse> {
 
 function tokenResponseToState(response: ExtensionTokenResponse): LicenseState {
   const access = response.access;
+  if (!response.extensionToken) {
+    throw new Error('CodersNexus did not return an extension token.');
+  }
+  if (!access || !('user' in access) || !access.user?.id) {
+    throw new Error('CodersNexus authorized the extension but did not return the account identity.');
+  }
+
   const verifyResponse = access
     ? ({ success: Boolean('hasAccess' in access ? access.hasAccess : response.success), ...access } as VerifyLicenseResponse)
     : ({
@@ -65,7 +72,11 @@ function tokenResponseToState(response: ExtensionTokenResponse): LicenseState {
         message: response.message || 'Extension authorized.',
       } as VerifyLicenseResponse);
 
-  return responseToState(response.extensionToken || '', verifyResponse);
+  const state = responseToState(response.extensionToken, verifyResponse);
+  if (!state.key || !state.userId) {
+    throw new Error('CodersNexus authorization completed, but the extension could not store the returned token.');
+  }
+  return state;
 }
 
 export async function startExtensionAuth(): Promise<LicenseState> {

@@ -61,10 +61,9 @@ export function Toolbar({ x, y, onPick, onCopy, onClose }: ToolbarProps) {
           onClick={onClose}
           className="rounded px-1.5 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white/90"
         >
-          ✕
+          x
         </button>
       </div>
-      {/* speech-bubble tail */}
       <div
         style={{
           position: 'absolute',

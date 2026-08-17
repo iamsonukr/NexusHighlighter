@@ -1,5 +1,6 @@
 import type { Highlight, LicenseState, PageRecord, Settings } from '@/types';
 import { DEFAULT_SETTINGS, EMPTY_LICENSE_STATE } from '@/types';
+import { normalizeUrl } from '@/utils/url';
 
 /**
  * Local persistence layer.
@@ -52,6 +53,15 @@ export async function getHighlightRecordMap(): Promise<Record<string, Highlight>
 export async function getHighlightsForPage(pageId: string): Promise<Highlight[]> {
   const all = await getAllHighlights();
   return all.filter((h) => h.pageId === pageId);
+}
+
+export async function getHighlightsForPageIdentity(pageId: string, urlCandidates: string[]): Promise<Highlight[]> {
+  const all = await getAllHighlights();
+  const urls = new Set(urlCandidates.map(safeNormalizeUrl).filter(Boolean));
+  return all.filter((h) => {
+    if (h.pageId === pageId) return true;
+    return urls.has(safeNormalizeUrl(h.canonicalUrl)) || urls.has(safeNormalizeUrl(h.url));
+  });
 }
 
 export async function getHighlightsForDomain(domain: string): Promise<Highlight[]> {
@@ -109,7 +119,16 @@ export async function upsertPage(page: PageRecord): Promise<void> {
 // ---------- Settings ----------
 
 export async function getSettings(): Promise<Settings> {
-  return getBucket<Settings>(KEYS.settings, DEFAULT_SETTINGS);
+  const stored = await getBucket<Partial<Settings>>(KEYS.settings, {});
+  const settings: Settings = { ...DEFAULT_SETTINGS, ...stored };
+
+  if (stored.syncToCloud === false && stored.syncPreferenceSet !== true) {
+    settings.syncToCloud = true;
+    settings.syncPreferenceSet = false;
+    await setBucket(KEYS.settings, settings);
+  }
+
+  return settings;
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {
@@ -165,4 +184,13 @@ export async function searchHighlights(query: string): Promise<Highlight[]> {
       .toLowerCase()
       .includes(q)
   );
+}
+
+function safeNormalizeUrl(url: string | null | undefined): string {
+  if (!url) return '';
+  try {
+    return normalizeUrl(url);
+  } catch {
+    return url;
+  }
 }

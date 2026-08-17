@@ -5,23 +5,19 @@ import pkg from './package.json';
 // policy: narrowest necessary, nothing requested for unimplemented features.
 // - storage: local persistence of highlights/pages/settings/license
 // - contextMenus: right-click "Highlight" / "Add note" actions
-// - activeTab: lets the popup read the current tab's URL (for the
-//   current-page highlight count) only when the person actually opens the
-//   popup — no standing access to tab URLs otherwise
-// - downloads: the Pro export feature (Markdown/JSON) writes a file via
-//   chrome.downloads rather than a page-level anchor click
-// - host_permissions is scoped to the license verification domain and the
-//   sync backend, so the background worker can make those fetch() calls.
-//   It deliberately does NOT include "<all_urls>" — content_scripts.matches
-//   below grants content-script injection on its own and needs no
-//   corresponding host_permissions entry.
-// - "scripting" and "tabs" are intentionally NOT requested: nothing in this
-//   codebase calls chrome.scripting.* or needs cross-tab URL/title access
-//   beyond what activeTab already covers.
+// - activeTab: lets the popup read the current tab's URL only when the person
+//   opens the popup, so there is no standing access to tab URLs
+// - downloads: the Pro export feature writes files via chrome.downloads
+// - identity: Chrome Identity web auth flow for CodersNexus extension login
+// - host_permissions is scoped to the license/auth domain and sync backend
+// - content_scripts.matches grants page injection only on normal web pages
+//   where users can create/restore highlights; host_permissions does not
+//   include broad page access
+// - "scripting" and "tabs" are intentionally not requested
 export default defineManifest({
   manifest_version: 3,
-  name: 'NoteMark — Highlight, Annotate, Remember',
-  short_name: 'NoteMark',
+  name: 'Nexus Highlighter',
+  short_name: 'Nexus HL',
   version: pkg.version,
   description:
     'Highlight, annotate, and organize anything you read on the web. Your highlights stay right where you left them.',
@@ -44,7 +40,7 @@ export default defineManifest({
   },
   content_scripts: [
     {
-      matches: ['<all_urls>'],
+      matches: ['http://*/*', 'https://*/*'],
       js: ['src/content/index.tsx'],
       run_at: 'document_idle',
       all_frames: false,
@@ -54,14 +50,7 @@ export default defineManifest({
   host_permissions: [
     'https://nexusbackend-ookk.onrender.com/*',
     'https://nexushighlighter.onrender.com/*',
-    'http://localhost:5000/*',
-    'http://127.0.0.1:5000/*',
   ],
-  // Explicit MV3 CSP: extension pages may only load scripts bundled in the
-  // package itself, matching the "Additional Requirements for Manifest V3"
-  // policy (no <script src> to anything outside the extension, no eval-style
-  // execution of remote strings). This is MV3's default, stated here so it
-  // can't silently drift.
   content_security_policy: {
     extension_pages: "script-src 'self'; object-src 'self'",
   },
@@ -76,7 +65,7 @@ export default defineManifest({
     },
     'toggle-sidebar': {
       suggested_key: { default: 'Alt+S' },
-      description: 'Open/close the NoteMark sidebar',
+      description: 'Open/close the Nexus Highlighter sidebar',
     },
   },
 });
