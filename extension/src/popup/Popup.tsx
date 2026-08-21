@@ -27,6 +27,12 @@ function openPurchasePage() {
   chrome.tabs.create({ url: PURCHASE_URL });
 }
 
+const KEYS_HELP_URL = 'https://codersnexus.com/blogs/coders-nexus-documentation/how-to-get-keys';
+
+function openKeysHelpPage() {
+  chrome.tabs.create({ url: KEYS_HELP_URL });
+}
+
 function startCodersNexusLogin(): Promise<LicenseState> {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type: 'START_EXTENSION_AUTH' }, (state: LicenseState | undefined) => {
@@ -509,9 +515,14 @@ function DashboardView({
           syncMessage={syncMessage}
         />
       ) : (
-        <button onClick={onRequestKey} className="w-full text-center text-xs font-bold text-accent underline">
-          Have a license key? Enter it here
-        </button>
+        <div className="space-y-2 text-center">
+          <button onClick={onRequestKey} className="w-full text-xs font-bold text-accent underline">
+            Have a license key? Enter it here
+          </button>
+          <button onClick={openKeysHelpPage} className="w-full text-[11px] font-bold text-accent underline">
+            Already purchased? Get your keys here
+          </button>
+        </div>
       )}
     </div>
   );
@@ -781,6 +792,9 @@ function LicenseBox({
       </button>
       <button className="mt-2 w-full text-center text-xs font-bold text-accent underline" onClick={onPurchase}>
         Buy or upgrade a plan
+      </button>
+      <button className="mt-2 w-full text-center text-xs font-bold text-accent underline" onClick={openKeysHelpPage}>
+        Already purchased? Get your keys here
       </button>
     </section>
   );
