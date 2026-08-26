@@ -1,4 +1,5 @@
 import type { Highlight, PageRecord } from '@/types';
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
 
 function groupHighlightsByPage(highlights: Highlight[]) {
   const byPage = new Map<string, Highlight[]>();
@@ -64,29 +65,100 @@ export function buildWordExport(highlights: Highlight[], pages: PageRecord[]): s
 }
 
 export async function downloadPdfExport(highlights: Highlight[], pages: PageRecord[]) {
-  const { jsPDF } = await import('jspdf');
   const pageById = new Map(pages.map((p) => [p.id, p]));
   const byPage = groupHighlightsByPage(highlights);
-  const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+  const doc = await PDFDocument.create();
+  const regularFont = await doc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
   const margin = 48;
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
   const textWidth = pageWidth - margin * 2;
-  let y = margin;
+  let page = doc.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
 
   function ensureSpace(height = 48) {
-    if (y + height <= pageHeight - margin) return;
-    doc.addPage();
-    y = margin;
+    if (y - height >= margin) return;
+    page = doc.addPage([pageWidth, pageHeight]);
+    y = pageHeight - margin;
   }
 
-  function writeText(text: string, size = 10, style: 'normal' | 'bold' = 'normal', gap = 12) {
-    doc.setFont('helvetica', style);
-    doc.setFontSize(size);
-    const lines = doc.splitTextToSize(text || ' ', textWidth) as string[];
-    ensureSpace(lines.length * (size + 4) + gap);
-    doc.text(lines, margin, y);
-    y += lines.length * (size + 4) + gap;
+  function safePdfText(text: string, font: PDFFont, size: number) {
+    return [...(text || ' ')].map((char) => {
+      try {
+        font.widthOfTextAtSize(char, size);
+        return char;
+      } catch {
+        return '?';
+      }
+    }).join('');
+  }
+
+  function wrapText(text: string, font: PDFFont, size: number) {
+    const normalized = safePdfText(text, font, size);
+    const lines: string[] = [];
+
+    normalized.split(/\r?\n/).forEach((paragraph) => {
+      const words = paragraph.trim().split(/\s+/).filter(Boolean);
+      if (!words.length) {
+        lines.push(' ');
+        return;
+      }
+
+      let line = '';
+      words.forEach((word) => {
+        const candidate = line ? `${line} ${word}` : word;
+        if (font.widthOfTextAtSize(candidate, size) <= textWidth) {
+          line = candidate;
+          return;
+        }
+
+        if (line) lines.push(line);
+        if (font.widthOfTextAtSize(word, size) <= textWidth) {
+          line = word;
+          return;
+        }
+
+        let chunk = '';
+        [...word].forEach((char) => {
+          const nextChunk = `${chunk}${char}`;
+          if (font.widthOfTextAtSize(nextChunk, size) <= textWidth) {
+            chunk = nextChunk;
+          } else {
+            if (chunk) lines.push(chunk);
+            chunk = char;
+          }
+        });
+        line = chunk;
+      });
+
+      if (line) lines.push(line);
+    });
+
+    return lines.length ? lines : [' '];
+  }
+
+  function drawHighlightBackground(targetPage: PDFPage, topY: number, lineCount: number, lineHeight: number) {
+    targetPage.drawRectangle({
+      x: margin - 6,
+      y: topY - lineCount * lineHeight + 3,
+      width: textWidth + 12,
+      height: lineCount * lineHeight + 6,
+      color: rgb(1, 0.96, 0.75),
+    });
+  }
+
+  function writeText(text: string, size = 10, style: 'normal' | 'bold' = 'normal', gap = 12, highlight = false) {
+    const font = style === 'bold' ? boldFont : regularFont;
+    const lineHeight = size + 4;
+    const lines = wrapText(text, font, size);
+    ensureSpace(lines.length * lineHeight + gap);
+    if (highlight) drawHighlightBackground(page, y, lines.length, lineHeight);
+    lines.forEach((line) => {
+      page.drawText(line, { x: margin, y, size, font, color: rgb(0.12, 0.16, 0.2) });
+      y -= lineHeight;
+    });
+    y -= gap;
   }
 
   writeText('Nexus Highlighter Study Notes', 22, 'bold', 8);
@@ -108,13 +180,27 @@ export async function downloadPdfExport(highlights: Highlight[], pages: PageReco
     hs.forEach((h, index) => {
       ensureSpace(84);
       writeText(`Highlight ${index + 1}`, 11, 'bold', 4);
-      writeText(h.anchor.selectedText, 10, 'normal', 8);
+      writeText(h.anchor.selectedText, 10, 'normal', 8, true);
       if (h.note) writeText(`Note: ${h.note}`, 10, 'normal', 8);
       if (h.tags.length) writeText(`Tags: ${h.tags.join(', ')}`, 9, 'normal', 14);
     });
   });
 
-  doc.save('nexus-highlighter-study-notes.pdf');
+  const bytes = await doc.save();
+  downloadBinaryFile('nexus-highlighter-study-notes.pdf', bytes, 'application/pdf');
+}
+
+function downloadBinaryFile(filename: string, bytes: Uint8Array, mimeType: string) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  chrome.downloads.download({
+    url: `data:${mimeType};base64,${btoa(binary)}`,
+    filename,
+    saveAs: true,
+  });
 }
 
 export function downloadTextFile(filename: string, content: string, mimeType: string) {
