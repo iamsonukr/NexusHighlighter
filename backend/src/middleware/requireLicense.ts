@@ -32,7 +32,12 @@ export async function requireLicense(req: AuthedRequest, res: Response, next: Ne
     const verifyRes = await fetch(config.licenseVerifyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId: config.licenseProductId, licenseKey }),
+      body: JSON.stringify({
+        productId: config.licenseProductId,
+        extensionSlug: config.licenseExtensionSlug,
+        licenseKey,
+        token: licenseKey,
+      }),
     });
     const data = (await verifyRes.json()) as VerifyLicenseResponse;
 

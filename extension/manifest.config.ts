@@ -48,7 +48,7 @@ export default defineManifest({
   ],
   permissions: ['storage', 'contextMenus', 'activeTab', 'downloads', 'identity'],
   host_permissions: [
-    'https://nexusbackend-ookk.onrender.com/*',
+    'https://cnexusbackend.onrender.com/*',
     'https://nexushighlighter.onrender.com/*',
   ],
   content_security_policy: {

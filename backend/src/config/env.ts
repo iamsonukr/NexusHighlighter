@@ -18,6 +18,7 @@ export const config = {
   // are duplicated here (matching the extension's src/background/license.ts)
   // only so this backend can independently confirm a license before
   // accepting a sync write. They are NOT this backend's own auth system.
-  licenseVerifyUrl: 'https://nexusbackend-ookk.onrender.com/api/subscriptions/verify',
-  licenseProductId: '6a7ae899e65a8aa481d69388',
+  licenseVerifyUrl: required('LICENSE_VERIFY_URL', 'https://cnexusbackend.onrender.com/api/subscriptions/verify'),
+  licenseProductId: required('LICENSE_PRODUCT_ID', '6a7ae899e65a8aa481d69388'),
+  licenseExtensionSlug: required('LICENSE_EXTENSION_SLUG', 'notemark'),
 } as const;

@@ -7,7 +7,7 @@ const EXTENSION_SLUG = 'notemark';
 const WEBSITE_LOGIN_URL = import.meta.env.VITE_CODERSNEXUS_LOGIN_URL || 'https://codersnexus.com/login';
 const TOKEN_URL =
   import.meta.env.VITE_EXTENSION_AUTH_TOKEN_URL ||
-  'https://nexusbackend-ookk.onrender.com/api/extension-auth/token';
+  'https://cnexusbackend.onrender.com/api/extension-auth/token';
 
 function createState(): string {
   const bytes = new Uint8Array(24);

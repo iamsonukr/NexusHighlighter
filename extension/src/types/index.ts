@@ -180,10 +180,12 @@ export interface LicenseState {
   key: string | null;
   status: LicenseStatus;
   hasAccess: boolean;
+  isPro: boolean;
   message: string | null;
   userId: string | null;
   userFullName: string | null;
   planName: string | null;
+  planType: string | null;
   expiresAt: string | null;
   lastVerifiedAt: number | null;
 }
@@ -192,10 +194,12 @@ export const EMPTY_LICENSE_STATE: LicenseState = {
   key: null,
   status: 'unset',
   hasAccess: false,
+  isPro: false,
   message: null,
   userId: null,
   userFullName: null,
   planName: null,
+  planType: null,
   expiresAt: null,
   lastVerifiedAt: null,
 };

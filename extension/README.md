@@ -79,7 +79,7 @@ required to use the core product:
    highlight cap, or trying Export/global search) reveals the single
    "License key" input (`src/popup/Popup.tsx`)
 3. Submitting calls the background worker → `src/background/license.ts` →
-   `POST https://nexusbackend-ookk.onrender.com/api/subscriptions/verify`
+   `POST https://cnexusbackend.onrender.com/api/subscriptions/verify`
    with `{ productId: "6a7ae899e65a8aa481d69388", licenseKey }`
 4. On `hasAccess: true`, the result is cached in `chrome.storage.local`, the
    popup badge switches to the plan name, and the background worker

@@ -12,7 +12,13 @@ import { getLicenseState, saveLicenseState } from '@/storage/db';
  *     in src/background/index.ts) and once right after install.
  */
 
-export const VERIFY_URL = 'https://nexusbackend-ookk.onrender.com/api/subscriptions/verify';
+export const VERIFY_URL = 'https://cnexusbackend.onrender.com/api/extension-auth/verify';
+export const EXTENSION_SLUG = 'notemark';
+export const EXTENSION_AUTH_URL =
+  import.meta.env.VITE_NEXUS_EXTENSION_AUTH_URL || 'https://codersnexus.com/login';
+export const EXTENSION_AUTH_TOKEN_URL =
+  import.meta.env.VITE_NEXUS_EXTENSION_AUTH_TOKEN_URL ||
+  'https://cnexusbackend.onrender.com/api/extension-auth/token';
 export const PRODUCT_ID = '6a7ae899e65a8aa481d69388';
 
 const VERIFY_TIMEOUT_MS = 15_000;
@@ -24,7 +30,7 @@ async function callVerifyEndpoint(licenseKey: string): Promise<VerifyLicenseResp
     const res = await fetch(VERIFY_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId: PRODUCT_ID, licenseKey }),
+      body: JSON.stringify({ productId: PRODUCT_ID, extensionSlug: EXTENSION_SLUG, licenseKey, token: licenseKey }),
       signal: controller.signal,
     });
     const data = (await res.json()) as VerifyLicenseResponse;
@@ -112,16 +118,18 @@ export function responseToState(key: string, response: VerifyLicenseResponse): L
   }
 
   const planType = response.plan?.type ? String(response.plan.type).toLowerCase() : null;
-  const hasPaidAccess = response.hasAccess && planType !== 'free';
+  const isPro = Boolean(response.hasAccess && planType !== 'free');
 
   return {
     key,
     status: 'valid',
-    hasAccess: hasPaidAccess,
+    hasAccess: response.hasAccess,
+    isPro,
     message: response.message,
     userId: response.user?.id ?? null,
     userFullName: response.user?.fullName ?? null,
     planName: response.plan?.name ?? null,
+    planType,
     expiresAt: response.license?.expiresAt ?? response.subscription?.endDate ?? null,
     lastVerifiedAt: Date.now(),
   };
