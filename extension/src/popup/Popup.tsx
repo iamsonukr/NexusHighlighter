@@ -5,15 +5,14 @@ import { DEFAULT_SETTINGS, EMPTY_LICENSE_STATE } from '@/types';
 import {
   deleteHighlight as deleteHighlightRecord,
   getAllHighlights,
-  getHighlightsForPageIdentity,
   getSettings,
   getStats,
   updateSettings,
 } from '@/storage/db';
-import { normalizeUrl, pageIdFor, getDomain } from '@/utils/url';
 import {
   HIGHLIGHT_WARNING_THRESHOLD,
   PURCHASE_URL,
+  getPlanHighlightLimit,
   REGISTERED_HIGHLIGHT_LIMIT,
   UNREGISTERED_HIGHLIGHT_LIMIT,
 } from '@/constants';
@@ -55,12 +54,12 @@ function formatDate(timestamp: number) {
 }
 
 function getHighlightLimit(license: LicenseState) {
-  if (license.hasAccess) return Number.POSITIVE_INFINITY;
+  if (license.hasAccess) return getPlanHighlightLimit(license.planType, license.planName);
   return license.key && license.userId ? REGISTERED_HIGHLIGHT_LIMIT : UNREGISTERED_HIGHLIGHT_LIMIT;
 }
 
 function getLimitLabel(limit: number) {
-  return Number.isFinite(limit) ? limit.toLocaleString() : 'Unlimited';
+  return limit.toLocaleString();
 }
 
 function formatExpiryDate(value: string | null) {
@@ -163,9 +162,9 @@ function Dashboard({
   const isRegistered = Boolean(license.key && license.userId);
   const limit = getHighlightLimit(license);
   const totalHighlights = stats?.totalHighlights ?? highlights.length;
-  const usageRatio = Number.isFinite(limit) ? Math.min(1, totalHighlights / limit) : 0;
-  const isNearLimit = Number.isFinite(limit) && usageRatio >= HIGHLIGHT_WARNING_THRESHOLD;
-  const isAtLimit = Number.isFinite(limit) && totalHighlights >= limit;
+  const usageRatio = Math.min(1, totalHighlights / limit);
+  const isNearLimit = usageRatio >= HIGHLIGHT_WARNING_THRESHOLD;
+  const isAtLimit = totalHighlights >= limit;
   const recentHighlights = useMemo(
     () => [...highlights].sort((a, b) => b.createdAt - a.createdAt).slice(0, 4),
     [highlights]
@@ -191,17 +190,17 @@ function Dashboard({
     setHighlights(nextHighlights);
     setSettings(nextSettings);
 
-    chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
-      if (!tab?.url) return;
-      try {
-        const normalizedUrl = normalizeUrl(tab.url);
-        const pageId = pageIdFor(normalizedUrl);
-        const pageHighlights = await getHighlightsForPageIdentity(pageId, [normalizedUrl]);
-        setCurrentPageCount(pageHighlights.length);
-        setCurrentDomain(getDomain(tab.url));
-      } catch {
-        setCurrentPageCount(0);
-      }
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (!tab?.id) return;
+      chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_STATS' }, (response: { count?: number; domain?: string } | undefined) => {
+        if (chrome.runtime.lastError || !response) {
+          setCurrentPageCount(0);
+          setCurrentDomain('');
+          return;
+        }
+        setCurrentPageCount(response.count ?? 0);
+        setCurrentDomain(response.domain ?? '');
+      });
     });
   }
 
@@ -211,7 +210,7 @@ function Dashboard({
 
   function openSidebar() {
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SIDEBAR' });
+      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'OPEN_SIDEBAR' }, () => void chrome.runtime.lastError);
     });
   }
 
@@ -239,7 +238,7 @@ function Dashboard({
       chrome.runtime.sendMessage({ type: 'SYNC_HIGHLIGHT', highlight: deleted }, () => void chrome.runtime.lastError);
     }
     chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHTS_UPDATED', pageId: highlight.pageId });
+      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'HIGHLIGHTS_UPDATED', pageId: highlight.pageId }, () => void chrome.runtime.lastError);
     });
     setStatusMessage('Highlight deleted.');
     await loadDashboard();
@@ -279,8 +278,15 @@ function Dashboard({
     });
   }
 
+  async function toggleThemeMode() {
+    const nextSettings = await updateSettings({
+      themeMode: settings.themeMode === 'night' ? 'day' : 'night',
+    });
+    setSettings(nextSettings);
+  }
+
   return (
-    <div className="min-h-[560px] bg-[#f6f3ee] font-body text-ink">
+    <div className={`nm-popup ${settings.themeMode === 'night' ? 'nm-popup-night dark' : 'nm-popup-day'} min-h-[560px] bg-[#f6f3ee] font-body text-ink`}>
       <div className="border-b border-[#ded7ca] bg-white px-4 py-3 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -290,7 +296,15 @@ function Dashboard({
               <p className="text-[11px] font-medium text-ink-soft">Research notes, kept tidy</p>
             </div>
           </div>
-          <PlanBadge license={license} onClick={onConnect} />
+          <div className="flex items-center gap-2">
+            <IconButton
+              label={settings.themeMode === 'night' ? 'Switch to day mode' : 'Switch to night mode'}
+              onClick={toggleThemeMode}
+            >
+              {settings.themeMode === 'night' ? <SunIcon /> : <MoonIcon />}
+            </IconButton>
+            <PlanBadge license={license} onClick={onConnect} />
+          </div>
         </div>
 
         <div className="mt-3 grid grid-cols-2 rounded-lg bg-[#f0ece4] p-1 text-xs font-semibold">
@@ -658,17 +672,6 @@ function UsageMeter({
   isNearLimit: boolean;
   isAtLimit: boolean;
 }) {
-  if (!Number.isFinite(limit)) {
-    return (
-      <div className="mt-4 rounded-lg border border-[#d5eadc] bg-[#f0fbf4] px-3 py-2">
-        <div className="flex items-center justify-between gap-3 text-xs">
-          <span className="font-bold text-[#267344]">Unlimited highlights available</span>
-          <span className="font-bold text-ink">{total.toLocaleString()} saved</span>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="mt-4">
       <div className="mb-1.5 flex items-center justify-between text-xs">
@@ -680,7 +683,7 @@ function UsageMeter({
       <div className="h-2 overflow-hidden rounded-full bg-[#e6ded1]">
         <div
           className={`h-full rounded-full transition-all duration-500 ${isAtLimit ? 'bg-[#d92d20]' : isNearLimit ? 'bg-[#f79009]' : 'bg-accent'}`}
-          style={{ width: `${Number.isFinite(limit) ? usageRatio * 100 : 100}%` }}
+          style={{ width: `${usageRatio * 100}%` }}
         />
       </div>
     </div>
@@ -1053,6 +1056,30 @@ function SyncIcon({ className = 'h-4 w-4' }: { className?: string }) {
       <path d="M3 12A9 9 0 0 1 18.5 5.8" />
       <path d="M18 2v4h4" />
       <path d="M6 22v-4H2" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M20.5 14.5A8 8 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
     </svg>
   );
 }

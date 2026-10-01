@@ -3,13 +3,15 @@ import {
   getAllHighlightRecords,
   getHighlightRecordMap,
   getLicenseState,
+  getPage,
   getSettings,
+  pruneDeletedHighlights,
   upsertHighlight as saveHighlight,
   upsertPage,
 } from '@/storage/db';
 import { getDomain } from '@/utils/url';
 
-const SYNC_API_BASE_URL = (import.meta.env.VITE_NOTEMARK_SYNC_API_URL || 'https://nexushighlighter.onrender.com/api').replace(
+const SYNC_API_BASE_URL = (import.meta.env.VITE_NOTEMARK_SYNC_API_URL || 'https://chighlighter.onrender.com/api').replace(
   /\/+$/,
   ''
 );
@@ -43,6 +45,7 @@ interface RemoteHighlight {
   clientCreatedAt: number;
   clientUpdatedAt: number;
   deletedAt: number | null;
+  updatedAt?: string;
 }
 
 function toRemoteHighlight(highlight: Highlight): RemoteHighlight {
@@ -121,6 +124,7 @@ async function readJson<T>(res: Response): Promise<ApiResponse<T>> {
 
 async function saveRemoteHighlight(remote: RemoteHighlight): Promise<string> {
   const highlight = fromRemoteHighlight(remote);
+  const existingPage = await getPage(highlight.pageId);
   await saveHighlight(highlight);
   await upsertPage({
     id: highlight.pageId,
@@ -128,11 +132,11 @@ async function saveRemoteHighlight(remote: RemoteHighlight): Promise<string> {
     canonicalUrl: highlight.canonicalUrl,
     domain: highlight.domain || getDomain(highlight.url),
     title: highlight.pageTitle || 'Untitled page',
-    description: null,
-    favicon: null,
-    readingStatus: 'reading',
+    description: existingPage?.description ?? null,
+    favicon: existingPage?.favicon ?? null,
+    readingStatus: existingPage?.readingStatus ?? 'reading',
     lastVisitedAt: highlight.updatedAt,
-    createdAt: highlight.createdAt,
+    createdAt: existingPage?.createdAt ?? highlight.createdAt,
     updatedAt: highlight.updatedAt,
   });
   return highlight.pageId;
@@ -154,7 +158,6 @@ export async function syncHighlight(highlight: Highlight): Promise<Set<string>> 
   const payload = await readJson<RemoteHighlight>(res);
   if (payload.data) {
     changedPageIds.add(await saveRemoteHighlight(payload.data));
-    await writeLastPull(identity.cursorKey, Math.max(await readLastPull(identity.cursorKey), payload.data.clientUpdatedAt));
   }
   return changedPageIds;
 }
@@ -174,7 +177,8 @@ export async function pullRemoteHighlights(options: { full?: boolean } = {}): Pr
   let nextLastPull = since;
 
   for (const remote of remotes) {
-    nextLastPull = Math.max(nextLastPull, remote.clientUpdatedAt);
+    const serverUpdatedAt = remote.updatedAt ? Date.parse(remote.updatedAt) : NaN;
+    nextLastPull = Math.max(nextLastPull, Number.isFinite(serverUpdatedAt) ? serverUpdatedAt : remote.clientUpdatedAt);
     const local = localMap[remote.clientId];
     if (local && local.updatedAt > remote.clientUpdatedAt) continue;
     changedPageIds.add(await saveRemoteHighlight(remote));
@@ -199,5 +203,6 @@ export async function syncAllHighlights(options: { fullPull?: boolean } = {}): P
 
   const pulledPageIds = await pullRemoteHighlights({ full: options.fullPull });
   pulledPageIds.forEach((pageId) => changedPageIds.add(pageId));
+  await pruneDeletedHighlights();
   return changedPageIds;
 }

@@ -19,7 +19,8 @@ import { normalizeUrl } from '@/utils/url';
  */
 
 const KEYS = {
-  highlights: 'nm_highlights', // Record<id, Highlight>
+  highlights: 'nm_highlights', // legacy Record<id, Highlight>
+  highlightPrefix: 'nm_hl:',
   pages: 'nm_pages', // Record<id, PageRecord>
   settings: 'nm_settings',
   license: 'nm_license',
@@ -36,18 +37,43 @@ async function setBucket<T>(key: string, value: T): Promise<void> {
 
 // ---------- Highlights ----------
 
+async function migrateLegacyHighlights(): Promise<void> {
+  const legacyMap = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
+  const entries = Object.entries(legacyMap);
+  if (!entries.length) return;
+
+  const next: Record<string, Highlight> = {};
+  entries.forEach(([id, highlight]) => {
+    next[`${KEYS.highlightPrefix}${id}`] = highlight;
+  });
+  next[KEYS.highlights] = {};
+  await chrome.storage.local.set(next);
+}
+
+async function getHighlightMapIncludingDeleted(): Promise<Record<string, Highlight>> {
+  await migrateLegacyHighlights();
+  const result = await chrome.storage.local.get(null);
+  const highlights: Record<string, Highlight> = {};
+  Object.entries(result).forEach(([key, value]) => {
+    if (!key.startsWith(KEYS.highlightPrefix)) return;
+    const highlight = value as Highlight;
+    if (highlight?.id) highlights[highlight.id] = highlight;
+  });
+  return highlights;
+}
+
 export async function getAllHighlights(): Promise<Highlight[]> {
-  const map = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
+  const map = await getHighlightMapIncludingDeleted();
   return Object.values(map).filter((h) => !h.deletedAt);
 }
 
 export async function getAllHighlightRecords(): Promise<Highlight[]> {
-  const map = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
+  const map = await getHighlightMapIncludingDeleted();
   return Object.values(map);
 }
 
 export async function getHighlightRecordMap(): Promise<Record<string, Highlight>> {
-  return getBucket<Record<string, Highlight>>(KEYS.highlights, {});
+  return getHighlightMapIncludingDeleted();
 }
 
 export async function getHighlightsForPage(pageId: string): Promise<Highlight[]> {
@@ -70,21 +96,32 @@ export async function getHighlightsForDomain(domain: string): Promise<Highlight[
 }
 
 export async function upsertHighlight(highlight: Highlight): Promise<void> {
-  const map = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
-  map[highlight.id] = highlight;
-  await setBucket(KEYS.highlights, map);
+  await chrome.storage.local.set({ [`${KEYS.highlightPrefix}${highlight.id}`]: highlight });
 }
 
 export async function deleteHighlight(id: string): Promise<Highlight | undefined> {
-  const map = await getBucket<Record<string, Highlight>>(KEYS.highlights, {});
-  if (map[id]) {
+  await migrateLegacyHighlights();
+  const key = `${KEYS.highlightPrefix}${id}`;
+  const result = await chrome.storage.local.get(key);
+  const highlight = result[key] as Highlight | undefined;
+  if (highlight) {
     // soft delete: keeps the record around so sync can propagate
     // the deletion instead of the row just silently reappearing.
-    map[id] = { ...map[id], deletedAt: Date.now(), updatedAt: Date.now() };
-    await setBucket(KEYS.highlights, map);
-    return map[id];
+    const deleted = { ...highlight, deletedAt: Date.now(), updatedAt: Date.now() };
+    await chrome.storage.local.set({ [key]: deleted });
+    return deleted;
   }
   return undefined;
+}
+
+export async function pruneDeletedHighlights(olderThanMs = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+  const map = await getHighlightMapIncludingDeleted();
+  const cutoff = Date.now() - olderThanMs;
+  const keysToRemove = Object.values(map)
+    .filter((highlight) => highlight.deletedAt && highlight.deletedAt < cutoff)
+    .map((highlight) => `${KEYS.highlightPrefix}${highlight.id}`);
+
+  if (keysToRemove.length) await chrome.storage.local.remove(keysToRemove);
 }
 
 /** Duplicate guard: same page + same exact text + not deleted. */
@@ -120,15 +157,7 @@ export async function upsertPage(page: PageRecord): Promise<void> {
 
 export async function getSettings(): Promise<Settings> {
   const stored = await getBucket<Partial<Settings>>(KEYS.settings, {});
-  const settings: Settings = { ...DEFAULT_SETTINGS, ...stored };
-
-  if (stored.syncToCloud === false && stored.syncPreferenceSet !== true) {
-    settings.syncToCloud = true;
-    settings.syncPreferenceSet = false;
-    await setBucket(KEYS.settings, settings);
-  }
-
-  return settings;
+  return { ...DEFAULT_SETTINGS, ...stored };
 }
 
 export async function updateSettings(patch: Partial<Settings>): Promise<Settings> {

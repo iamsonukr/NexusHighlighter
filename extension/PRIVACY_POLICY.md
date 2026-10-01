@@ -53,14 +53,15 @@ actions, when Chrome starts, and before cloud sync requests.
 
 ### Cloud Sync
 
-Cloud sync is on by default for connected CodersNexus accounts. When cloud sync
-is enabled, your highlights, notes, tags, page URLs, canonical URLs, page titles,
-domains, favicon URLs, colors, pinned/archived state, and timestamps are sent to
-the Nexus Highlighter sync backend so they can be backed up and restored across
-your Chrome installations for the same CodersNexus account.
+Cloud sync is off until you enable it in the extension popup for a connected
+CodersNexus account. When cloud sync is enabled, your highlights, notes, tags,
+page URLs, canonical URLs, page titles, domains, favicon URLs, colors,
+pinned/archived state, and timestamps are sent to the Nexus Highlighter sync
+backend so they can be backed up and restored across your Chrome installations
+for the same CodersNexus account.
 
-You can turn cloud sync off in the extension popup. If cloud sync is off,
-highlights remain local to your browser and are not sent to the sync backend.
+If cloud sync is off, highlights remain local to your browser and are not sent
+to the sync backend.
 
 ## Data We Do Not Collect
 

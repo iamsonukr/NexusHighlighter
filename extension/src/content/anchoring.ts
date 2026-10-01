@@ -171,8 +171,9 @@ function getSurroundingText(range: Range, len: number): { before: string; after:
 function findAllTextOccurrences(root: HTMLElement, text: string): Range[] {
   if (!text) return [];
   const ranges: Range[] = [];
+  const visibilityCache = new WeakMap<HTMLElement, boolean>();
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (isVisible(n.parentElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+    acceptNode: (n) => (isVisible(n.parentElement, visibilityCache) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
   });
   const nodes: Text[] = [];
   let node: Node | null;
@@ -259,11 +260,15 @@ function buildRangeFromFlatOffsets(nodes: Text[], start: number, end: number): L
   return { range, strategy: 1 };
 }
 
-function isVisible(el: HTMLElement | null): boolean {
+function isVisible(el: HTMLElement | null, cache?: WeakMap<HTMLElement, boolean>): boolean {
   if (!el) return false;
   if (el.closest('[data-notemark-ui]')) return false; // never match inside our own UI
+  const cached = cache?.get(el);
+  if (cached !== undefined) return cached;
   const style = window.getComputedStyle(el);
-  return style.display !== 'none' && style.visibility !== 'hidden';
+  const visible = style.display !== 'none' && style.visibility !== 'hidden';
+  cache?.set(el, visible);
+  return visible;
 }
 
 /** Cheap trigram-ish similarity for fuzzy paragraph matching (0..1). */

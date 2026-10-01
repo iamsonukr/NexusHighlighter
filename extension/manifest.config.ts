@@ -1,13 +1,11 @@
-import { defineManifest } from '@crxjs/vite-plugin';
+import { defineDynamicResource, defineManifest } from '@crxjs/vite-plugin';
 import pkg from './package.json';
 
 // Manifest V3. Permissions follow the Chrome Web Store "Use of Permissions"
 // policy: narrowest necessary, nothing requested for unimplemented features.
 // - storage: local persistence of highlights/pages/settings/license
 // - contextMenus: right-click "Highlight" / "Add note" actions
-// - activeTab: lets the popup read the current tab's URL only when the person
-//   opens the popup, so there is no standing access to tab URLs
-// - downloads: the Pro export feature writes files via chrome.downloads
+// - downloads: the paid export feature writes files via chrome.downloads
 // - identity: Chrome Identity web auth flow for CodersNexus extension login
 // - host_permissions is scoped to the license/auth domain and sync backend
 // - content_scripts.matches grants page injection only on normal web pages
@@ -46,14 +44,20 @@ export default defineManifest({
       all_frames: false,
     },
   ],
-  permissions: ['storage', 'contextMenus', 'activeTab', 'downloads', 'identity'],
+  permissions: ['storage', 'contextMenus', 'downloads', 'identity'],
   host_permissions: [
     'https://cnexusbackend.onrender.com/*',
-    'https://nexushighlighter.onrender.com/*',
+    'https://chighlighter.onrender.com/*',
   ],
   content_security_policy: {
     extension_pages: "script-src 'self'; object-src 'self'",
   },
+  web_accessible_resources: [
+    defineDynamicResource({
+      matches: ['http://*/*', 'https://*/*'],
+      use_dynamic_url: true,
+    }),
+  ],
   commands: {
     'highlight-selection': {
       suggested_key: { default: 'Alt+H' },

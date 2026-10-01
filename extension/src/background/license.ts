@@ -21,7 +21,7 @@ export const EXTENSION_AUTH_TOKEN_URL =
   'https://cnexusbackend.onrender.com/api/extension-auth/token';
 export const PRODUCT_ID = '6a7ae899e65a8aa481d69388';
 
-const VERIFY_TIMEOUT_MS = 15_000;
+const VERIFY_TIMEOUT_MS = 30_000;
 
 async function callVerifyEndpoint(licenseKey: string): Promise<VerifyLicenseResponse> {
   const controller = new AbortController();

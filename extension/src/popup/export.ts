@@ -191,21 +191,16 @@ export async function downloadPdfExport(highlights: Highlight[], pages: PageReco
 }
 
 function downloadBinaryFile(filename: string, bytes: Uint8Array, mimeType: string) {
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  chrome.downloads.download({
-    url: `data:${mimeType};base64,${btoa(binary)}`,
-    filename,
-    saveAs: true,
-  });
+  downloadBlob(filename, new Blob([bytes], { type: mimeType }));
 }
 
 export function downloadTextFile(filename: string, content: string, mimeType: string) {
-  // chrome.downloads with a data: URL, rather than a blob: URL, so the
-  // download survives even if the popup closes right after the click.
-  const dataUrl = `data:${mimeType};charset=utf-8,${encodeURIComponent(content)}`;
-  chrome.downloads.download({ url: dataUrl, filename, saveAs: true });
+  downloadBlob(filename, new Blob([content], { type: `${mimeType};charset=utf-8` }));
+}
+
+function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  chrome.downloads.download({ url, filename, saveAs: true }, () => {
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  });
 }

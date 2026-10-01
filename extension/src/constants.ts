@@ -11,6 +11,19 @@
 export const UNREGISTERED_HIGHLIGHT_LIMIT = 100;
 export const REGISTERED_HIGHLIGHT_LIMIT = 500;
 export const FREE_HIGHLIGHT_LIMIT = REGISTERED_HIGHLIGHT_LIMIT;
+export const BASIC_HIGHLIGHT_LIMIT = 3000;
+export const ADVANCED_HIGHLIGHT_LIMIT = 6000;
+export const PRO_HIGHLIGHT_LIMIT = 10000;
+
+export function getPlanHighlightLimit(planType?: string | null, planName?: string | null) {
+  const plan = `${planType ?? ''} ${planName ?? ''}`.toLowerCase();
+
+  if (plan.includes('pro')) return PRO_HIGHLIGHT_LIMIT;
+  if (plan.includes('advance')) return ADVANCED_HIGHLIGHT_LIMIT;
+  if (plan.includes('basic')) return BASIC_HIGHLIGHT_LIMIT;
+
+  return REGISTERED_HIGHLIGHT_LIMIT;
+}
 
 // Percent-of-limit thresholds at which we start nudging toward upgrading,
 // so the first thing a near-limit user sees isn't a hard wall.

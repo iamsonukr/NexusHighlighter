@@ -8,7 +8,7 @@ highlight-sync bridge. Local persistence still works without this repo's
 backend; once a license key verifies, the background worker can sync
 highlights to `../backend` (`http://localhost:5000/api` by default; set
 `VITE_NOTEMARK_SYNC_API_URL` and add the matching manifest host permission
-for a deployed backend). There are still no accounts.
+for a deployed backend) after CodersNexus registration/login.
 
 ---
 
@@ -39,14 +39,14 @@ for a deployed backend). There are still no accounts.
 - **Local persistence + Pro sync** via `chrome.storage.local`
   (`src/storage/db.ts`) and `src/sync/client.ts`, with soft deletes
   (`deletedAt`) propagated as tombstones
-- **Licensing, not accounts, with a real free tier**: no login/signup/payment
-  UI anywhere in the extension. The extension is fully usable with **no key at
-  all** — that's the free tier (see §3). Entering a key that verifies unlocks
-  Pro.
+- **Registration, licensing, and a real free tier**: the extension is fully
+  usable with **no key at all** as the unregistered free tier. Connecting a
+  CodersNexus account raises the free highlight limit, and a paid license
+  unlocks Pro.
 - **Free vs. Pro gating** (`src/constants.ts`):
   - Free: highlighting, notes, colors, tags, per-page sidebar search — capped
     at 500 total highlights across all pages
-  - Pro: unlimited highlights, cross-page global search (in the popup),
+  - Pro: 10,000 highlights, cross-page global search (in the popup),
     PDF/Docs export — all gated behind `license.hasAccess`, re-checked
     live via a `LICENSE_UPDATED` broadcast so open tabs flip the moment a key
     is activated, with no reload needed
@@ -56,8 +56,8 @@ for a deployed backend). There are still no accounts.
 Per the brief's own phased instructions (§57–58), most Phase 2 features are
 still not present:
 
-- No accounts/JWT auth. Highlight sync uses the stored license key in the
-  `x-license-key` header.
+- No JWT auth inside this repo. Highlight sync uses the extension token/license
+  key in the `x-license-key` header after CodersNexus login.
 - No collections, reading list, analytics dashboard, sharing — Phase 2/3
 - No AI features (summarize, ask-the-page, flashcards) — Phase 3, and should
   stay opt-in per action even once added (privacy-first, see brief §24)
@@ -70,14 +70,12 @@ still not present:
 
 ## 3. Licensing flow (free tier + Pro key)
 
-There is **no login, signup, or payment inside the extension**, and no key is
-required to use the core product:
+No key is required to use the core product:
 
 1. Fresh install → free tier is active immediately (highlighting, notes,
    colors, tags, per-page sidebar search — capped at 500 total highlights)
-2. Popup shows a "Free · Upgrade" badge; clicking it (or hitting the
-   highlight cap, or trying Export/global search) reveals the single
-   "License key" input (`src/popup/Popup.tsx`)
+2. Popup shows a free badge; clicking it, hitting the highlight cap, or trying
+   Pro export opens CodersNexus login or the license-key flow
 3. Submitting calls the background worker → `src/background/license.ts` →
    `POST https://cnexusbackend.onrender.com/api/subscriptions/verify`
    with `{ productId: "6a7ae899e65a8aa481d69388", licenseKey }`
@@ -104,7 +102,7 @@ extension — it only ever calls the one `verify` endpoint.
 |---|---|---|
 | Highlighting, colors, notes, tags | ✅ | ✅ |
 | Per-page sidebar search | ✅ | ✅ |
-| Total highlights | 500 (`FREE_HIGHLIGHT_LIMIT` in `src/constants.ts`) | Unlimited |
+| Total highlights | 500 (`FREE_HIGHLIGHT_LIMIT` in `src/constants.ts`) | 10,000 |
 | Search across every saved page (popup) | ❌ | ✅ |
 | Export (PDF / Docs) | ❌ | ✅ |
 
@@ -142,7 +140,7 @@ Worth being straight about this rather than pretending every gate is bulletproof
   check — enforcing it server-side would require giving free users some form
   of identity (a device ID, a lightweight anonymous account) purely to track
   a counter. That's a real design trade-off, not an oversight: it directly
-  conflicts with "standalone, no accounts" and with the privacy settings
+  conflicts with "usable without registration" and with the privacy settings
   already built into the product (§43 in the original brief — no silent
   tracking). A determined user can always reset their own local count. In
   practice this is the same trade-off most local-first free tiers make
@@ -184,8 +182,8 @@ Verified against the live [Chrome Web Store Developer Program Policies](https://
   claimed.
 - **Use of Permissions — "narrowest permissions necessary... don't
   future-proof by requesting permissions for unimplemented features."**
-  `manifest.config.ts` requests only `storage`, `contextMenus`, `activeTab`,
-  `downloads`. An earlier draft also requested `scripting`, which nothing in
+  `manifest.config.ts` requests only `storage`, `contextMenus`, `downloads`,
+  and `identity`. An earlier draft also requested `scripting`, which nothing in
   the codebase calls — removed. `host_permissions` is scoped to the license
   API's own domain only, not `<all_urls>` — content-script injection on
   every page comes from `content_scripts.matches`, which doesn't need a

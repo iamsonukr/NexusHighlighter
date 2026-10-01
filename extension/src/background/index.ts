@@ -1,4 +1,4 @@
-import type { ExtensionMessage, LicenseState } from '@/types';
+import type { ExtensionMessage, LicenseAccessState, LicenseState } from '@/types';
 import { EMPTY_LICENSE_STATE } from '@/types';
 import { activateLicense, reverifyStoredLicense } from './license';
 import { startExtensionAuth } from './extensionAuth';
@@ -8,10 +8,25 @@ import { PURCHASE_URL } from '@/constants';
 
 // Lets already-open tabs flip between free/Pro immediately after activation
 // or "change key", instead of waiting for a reload.
+function toLicenseAccessState(state: LicenseState): LicenseAccessState {
+  return {
+    status: state.status,
+    hasAccess: state.hasAccess,
+    isPro: state.isPro,
+    message: state.message,
+    userId: state.userId,
+    planName: state.planName,
+    planType: state.planType,
+    expiresAt: state.expiresAt,
+    lastVerifiedAt: state.lastVerifiedAt,
+  };
+}
+
 function broadcastLicenseState(state: LicenseState) {
+  const publicState = toLicenseAccessState(state);
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach((tab) => {
-      if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'LICENSE_UPDATED', state }, () => void chrome.runtime.lastError);
+      if (tab.id) chrome.tabs.sendMessage(tab.id, { type: 'LICENSE_UPDATED', state: publicState }, () => void chrome.runtime.lastError);
     });
   });
 }
@@ -89,10 +104,10 @@ function setupContextMenus() {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return;
   if (info.menuItemId === 'nm-add-note') {
-    chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_ADD_NOTE', selectionText: info.selectionText });
+    chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_ADD_NOTE', selectionText: info.selectionText }, () => void chrome.runtime.lastError);
   } else if (typeof info.menuItemId === 'string' && info.menuItemId.startsWith('nm-highlight-')) {
     const color = info.menuItemId.replace('nm-highlight-', '');
-    chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_HIGHLIGHT', color, selectionText: info.selectionText });
+    chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_HIGHLIGHT', color, selectionText: info.selectionText }, () => void chrome.runtime.lastError);
   }
 });
 
@@ -101,11 +116,11 @@ chrome.commands.onCommand.addListener((command) => {
   chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
     if (!tab?.id) return;
     if (command === 'highlight-selection') {
-      chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_HIGHLIGHT', color: 'yellow' });
+      chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_HIGHLIGHT', color: 'yellow' }, () => void chrome.runtime.lastError);
     } else if (command === 'add-note') {
-      chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_ADD_NOTE' });
+      chrome.tabs.sendMessage(tab.id, { type: 'CONTEXT_ADD_NOTE' }, () => void chrome.runtime.lastError);
     } else if (command === 'toggle-sidebar') {
-      chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
+      chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' }, () => void chrome.runtime.lastError);
     }
   });
 });

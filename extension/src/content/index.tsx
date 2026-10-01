@@ -29,9 +29,10 @@ import {
   findDuplicateHighlight,
   upsertPage,
   getLicenseState,
+  getSettings,
 } from '@/storage/db';
-import { REGISTERED_HIGHLIGHT_LIMIT, UNREGISTERED_HIGHLIGHT_LIMIT } from '@/constants';
-import type { Highlight, HighlightColor, LicenseState } from '@/types';
+import { getPlanHighlightLimit, REGISTERED_HIGHLIGHT_LIMIT, UNREGISTERED_HIGHLIGHT_LIMIT } from '@/constants';
+import type { Highlight, HighlightColor, LicenseAccessState, LicenseState } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Licensing: the extension is fully usable with no key at all (free tier).
@@ -40,15 +41,16 @@ import type { Highlight, HighlightColor, LicenseState } from '@/types';
 // ---------------------------------------------------------------------------
 main();
 
-function getHighlightLimit(state: LicenseState) {
-  if (state.hasAccess) return Number.POSITIVE_INFINITY;
-  return state.key && state.userId ? REGISTERED_HIGHLIGHT_LIMIT : UNREGISTERED_HIGHLIGHT_LIMIT;
+function getHighlightLimit(state: Pick<LicenseState, 'hasAccess' | 'userId' | 'planName' | 'planType'>) {
+  if (state.hasAccess) return getPlanHighlightLimit(state.planType, state.planName);
+  return state.userId ? REGISTERED_HIGHLIGHT_LIMIT : UNREGISTERED_HIGHLIGHT_LIMIT;
 }
 
 async function main() {
   let pageId = pageIdFor(getCanonicalUrl());
   let highlights: Highlight[] = await getHighlightsForPageIdentity(pageId, getPageUrlCandidates());
   let license: LicenseState = await getLicenseState();
+  let themeMode = (await getSettings()).themeMode;
   let highlightLimit = getHighlightLimit(license);
 
   // NOTE: page metadata (title/url/domain/favicon) is intentionally NOT
@@ -75,10 +77,17 @@ async function main() {
   shadow.appendChild(mountPoint);
   const root: Root = createRoot(mountPoint);
 
+  function applyTheme() {
+    mountPoint.className = themeMode === 'night' ? 'nm-theme-night' : 'nm-theme-day';
+  }
+  applyTheme();
+
   let toolbarState: { x: number; y: number; range: Range } | null = null;
   let sidebarOpen = false;
   let editingHighlightId: string | null = null;
-  let upsell: { message: string; actionLabel: string; action: 'register' | 'upgrade' } | null = null;
+  let upsell: { message: string; actionLabel?: string; action?: 'register' | 'upgrade' } | null = null;
+  const unresolvedRetryAt = new Map<string, number>();
+  const unresolvedAttempts = new Map<string, number>();
 
   function requestHighlightSync(highlight: Highlight) {
     chrome.runtime.sendMessage({ type: 'SYNC_HIGHLIGHT', highlight }, () => void chrome.runtime.lastError);
@@ -86,6 +95,8 @@ async function main() {
 
   async function reloadPageHighlights() {
     removeAllHighlights();
+    unresolvedRetryAt.clear();
+    unresolvedAttempts.clear();
     const canonicalUrl = getCanonicalUrl();
     pageId = pageIdFor(canonicalUrl);
     highlights = await getHighlightsForPageIdentity(pageId, getPageUrlCandidates());
@@ -129,11 +140,12 @@ async function main() {
           <UpsellBanner
             message={upsell.message}
             actionLabel={upsell.actionLabel}
-            onAction={() =>
+            onAction={() => {
+              if (!upsell?.action) return;
               chrome.runtime.sendMessage({
-                type: upsell?.action === 'register' ? 'START_EXTENSION_AUTH' : 'OPEN_PURCHASE_PAGE',
-              })
-            }
+                type: upsell.action === 'register' ? 'START_EXTENSION_AUTH' : 'OPEN_PURCHASE_PAGE',
+              });
+            }}
             onDismiss={() => {
               upsell = null;
               render();
@@ -144,23 +156,33 @@ async function main() {
     );
   }
 
-  // ---- Selection -> floating toolbar ----
-  document.addEventListener('mouseup', (e) => {
-    if ((e.target as HTMLElement)?.closest?.('[data-notemark-ui]')) return;
-    window.setTimeout(() => {
-      const selection = window.getSelection();
-      const text = selection?.toString().trim();
-      if (!selection || !text || selection.rangeCount === 0) {
-        if (toolbarState) {
-          toolbarState = null;
-          render();
-        }
-        return;
+  function updateToolbarFromSelection() {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
+    if (!selection || !text || selection.rangeCount === 0) {
+      if (toolbarState) {
+        toolbarState = null;
+        render();
       }
-      const range = selection.getRangeAt(0).cloneRange();
-      const rect = range.getBoundingClientRect();
-      toolbarState = { x: rect.left + rect.width / 2, y: rect.top - 10, range };
-      render();
+      return;
+    }
+    const range = selection.getRangeAt(0).cloneRange();
+    const rect = range.getBoundingClientRect();
+    toolbarState = { x: rect.left + rect.width / 2, y: rect.top - 10, range };
+    render();
+  }
+
+  // ---- Selection -> floating toolbar ----
+  document.addEventListener('mouseup', (event) => {
+    if ((event.target as HTMLElement)?.closest?.('[data-notemark-ui]')) return;
+    window.setTimeout(() => {
+      updateToolbarFromSelection();
+    }, 0);
+  });
+  document.addEventListener('keyup', (event) => {
+    if ((event.target as HTMLElement)?.closest?.('[data-notemark-ui]')) return;
+    window.setTimeout(() => {
+      updateToolbarFromSelection();
     }, 0);
   });
 
@@ -201,7 +223,7 @@ async function main() {
         const isRegistered = Boolean(license.key && license.userId);
         upsell = isRegistered
           ? {
-              message: `You have reached ${REGISTERED_HIGHLIGHT_LIMIT} free highlights. Upgrade to keep growing your research library.`,
+              message: `You have reached your ${highlightLimit.toLocaleString()} highlight limit. Upgrade to keep growing your research library.`,
               actionLabel: 'View upgrade options',
               action: 'upgrade',
             }
@@ -216,24 +238,6 @@ async function main() {
     }
 
     const id = uid('hl');
-    renderHighlight(range, id, color);
-
-    // First highlight on this page: this is the one moment we write a
-    // PageRecord at all (see the note at the top of main()).
-    await upsertPage({
-      id: pageId,
-      url: location.href,
-      canonicalUrl,
-      domain: getDomain(location.href),
-      title: getPageTitle(),
-      description: getPageDescription(),
-      favicon: getFavicon(),
-      readingStatus: 'reading',
-      lastVisitedAt: Date.now(),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
-
     const highlight: Highlight = {
       id,
       userId: 'local',
@@ -253,9 +257,37 @@ async function main() {
       updatedAt: Date.now(),
       deletedAt: null,
     };
-    await upsertHighlight(highlight);
+
+    try {
+      // First highlight on this page: this is the one moment we write a
+      // PageRecord at all (see the note at the top of main()).
+      await upsertPage({
+        id: pageId,
+        url: location.href,
+        canonicalUrl,
+        domain: getDomain(location.href),
+        title: getPageTitle(),
+        description: getPageDescription(),
+        favicon: getFavicon(),
+        readingStatus: 'reading',
+        lastVisitedAt: Date.now(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      await upsertHighlight(highlight);
+    } catch {
+      upsell = {
+        message: 'Nexus Highlighter could not save this highlight. Check extension storage and try again.',
+      };
+      render();
+      return;
+    }
+
+    renderHighlight(range, id, color);
     requestHighlightSync(highlight);
     highlights = [...highlights, highlight];
+    unresolvedRetryAt.delete(highlight.id);
+    unresolvedAttempts.delete(highlight.id);
     if (options.openNote) {
       sidebarOpen = true;
       editingHighlightId = id;
@@ -279,6 +311,8 @@ async function main() {
     const deleted = await deleteHighlightRecord(id);
     if (deleted) requestHighlightSync(deleted);
     highlights = highlights.filter((x) => x.id !== id);
+    unresolvedRetryAt.delete(id);
+    unresolvedAttempts.delete(id);
     render();
   }
 
@@ -299,20 +333,38 @@ async function main() {
       const located = locateAnchor(h.anchor);
       if (located) {
         renderHighlight(located.range, h.id, h.color);
+        unresolvedRetryAt.delete(h.id);
+        unresolvedAttempts.delete(h.id);
+      } else {
+        scheduleUnresolvedRetry(h.id);
       }
       // If not found, the highlight simply isn't rendered on the page (its
       // note/text are still visible and editable from the sidebar/dashboard);
       // see product brief section 44 for the "page changed" messaging this enables.
     });
   }
+
+  function scheduleUnresolvedRetry(id: string) {
+    const attempts = (unresolvedAttempts.get(id) ?? 0) + 1;
+    unresolvedAttempts.set(id, attempts);
+    const delay = Math.min(60_000, 1_000 * 2 ** Math.min(attempts, 6));
+    unresolvedRetryAt.set(id, Date.now() + delay);
+  }
   restoreHighlights();
   render();
 
   // ---- Messages from background (context menu / keyboard shortcuts / popup) ----
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'TOGGLE_SIDEBAR' || message?.type === 'OPEN_SIDEBAR') {
       sidebarOpen = message.type === 'OPEN_SIDEBAR' ? true : !sidebarOpen;
       render();
+    } else if (message?.type === 'GET_PAGE_STATS') {
+      sendResponse({
+        pageId,
+        domain: getDomain(location.href),
+        count: highlights.length,
+      });
+      return;
     } else if (message?.type === 'CONTEXT_HIGHLIGHT') {
       const selection = window.getSelection();
       if (selection && selection.toString().trim()) {
@@ -337,7 +389,8 @@ async function main() {
         render();
       }
     } else if (message?.type === 'LICENSE_UPDATED') {
-      license = message.state as LicenseState;
+      const accessState = message.state as LicenseAccessState;
+      license = { ...license, ...accessState, key: license.key };
       highlightLimit = getHighlightLimit(license);
       if (license.hasAccess || (license.key && license.userId)) {
         upsell = null;
@@ -346,6 +399,12 @@ async function main() {
     } else if (message?.type === 'HIGHLIGHTS_UPDATED' && message.pageId === pageId) {
       void reloadPageHighlights();
     }
+  });
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes.nm_settings?.newValue) return;
+    themeMode = changes.nm_settings.newValue.themeMode ?? 'day';
+    applyTheme();
   });
 
   // ---- SPA navigation support ----
@@ -387,10 +446,21 @@ async function main() {
   const observer = new MutationObserver(() => {
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(() => {
+      if (location.href !== lastUrl) {
+        void handleUrlChange();
+        return;
+      }
       const unrendered = highlights.filter((h) => !document.querySelector(`nm-mark[data-nm-id="${h.id}"]`));
       unrendered.forEach((h) => {
+        if ((unresolvedRetryAt.get(h.id) ?? 0) > Date.now()) return;
         const located = locateAnchor(h.anchor);
-        if (located) renderHighlight(located.range, h.id, h.color);
+        if (located) {
+          renderHighlight(located.range, h.id, h.color);
+          unresolvedRetryAt.delete(h.id);
+          unresolvedAttempts.delete(h.id);
+        } else {
+          scheduleUnresolvedRetry(h.id);
+        }
       });
     }, 800);
   });

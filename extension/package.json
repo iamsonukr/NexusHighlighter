@@ -1,12 +1,12 @@
 {
   "name": "notemark-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Nexus Highlighter - highlight, annotate, and remember anything you read on the web.",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/patch-manifest.mjs",
     "lint": "eslint src --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\""
   },

@@ -70,22 +70,20 @@ export interface Settings {
   defaultColor: HighlightColor;
   syncToCloud: boolean;
   syncPreferenceSet: boolean;
-  allowAnalytics: boolean;
-  aiFeaturesEnabled: boolean;
+  themeMode: 'day' | 'night';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   defaultColor: 'yellow',
-  syncToCloud: true,
+  syncToCloud: false,
   syncPreferenceSet: false,
-  allowAnalytics: false,
-  aiFeaturesEnabled: false,
+  themeMode: 'day',
 };
 
 // Messages passed between content script, background worker, and popup.
 export type ExtensionMessage =
   | { type: 'HIGHLIGHTS_UPDATED'; pageId: string }
-  | { type: 'GET_PAGE_STATS'; url: string }
+  | { type: 'GET_PAGE_STATS' }
   | { type: 'OPEN_SIDEBAR' }
   | { type: 'OPEN_PURCHASE_PAGE' }
   | { type: 'START_EXTENSION_AUTH' }
@@ -96,13 +94,13 @@ export type ExtensionMessage =
   | { type: 'CLEAR_LICENSE' }
   | { type: 'SYNC_HIGHLIGHT'; highlight: Highlight }
   | { type: 'SYNC_ALL_HIGHLIGHTS'; fullPull?: boolean }
-  | { type: 'LICENSE_UPDATED'; state: LicenseState };
+  | { type: 'LICENSE_UPDATED'; state: LicenseAccessState };
 
 // ---------- Licensing ----------
-// The extension has no accounts, login, or in-extension payment. A single
-// license key is entered once in the popup and checked against the
-// customer's own backend. All purchase/payment happens on that website,
-// outside the extension entirely.
+// Registration/login happens on CodersNexus via Chrome Identity. A returned
+// extension token/license key is stored locally and checked against the
+// customer's backend. All purchase/payment happens on that website, outside
+// the extension entirely.
 
 export interface VerifyLicenseSuccess {
   success: true;
@@ -189,6 +187,11 @@ export interface LicenseState {
   expiresAt: string | null;
   lastVerifiedAt: number | null;
 }
+
+export type LicenseAccessState = Pick<
+  LicenseState,
+  'status' | 'hasAccess' | 'isPro' | 'message' | 'userId' | 'planName' | 'planType' | 'expiresAt' | 'lastVerifiedAt'
+>;
 
 export const EMPTY_LICENSE_STATE: LicenseState = {
   key: null,
