@@ -13,6 +13,7 @@ import {
   HIGHLIGHT_WARNING_THRESHOLD,
   PURCHASE_URL,
   getPlanHighlightLimit,
+  isPaidPlan,
   REGISTERED_HIGHLIGHT_LIMIT,
   UNREGISTERED_HIGHLIGHT_LIMIT,
 } from '@/constants';
@@ -56,6 +57,10 @@ function formatDate(timestamp: number) {
 function getHighlightLimit(license: LicenseState) {
   if (license.hasAccess) return getPlanHighlightLimit(license.planType, license.planName);
   return license.key && license.userId ? REGISTERED_HIGHLIGHT_LIMIT : UNREGISTERED_HIGHLIGHT_LIMIT;
+}
+
+function hasPaidAccess(license: LicenseState) {
+  return Boolean(license.hasAccess && isPaidPlan(license.planType, license.planName));
 }
 
 function getLimitLabel(limit: number) {
@@ -160,6 +165,7 @@ function Dashboard({
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const isRegistered = Boolean(license.key && license.userId);
+  const paidAccess = hasPaidAccess(license);
   const limit = getHighlightLimit(license);
   const totalHighlights = stats?.totalHighlights ?? highlights.length;
   const usageRatio = Math.min(1, totalHighlights / limit);
@@ -218,7 +224,7 @@ function Dashboard({
     const fresh = await new Promise<LicenseState>((resolve) =>
       chrome.runtime.sendMessage({ type: 'REVERIFY_LICENSE' }, resolve)
     );
-    if (!fresh.hasAccess) {
+    if (!hasPaidAccess(fresh)) {
       onLicenseChange(fresh);
       onPurchase();
       return;
@@ -333,6 +339,7 @@ function Dashboard({
             isAtLimit={isAtLimit}
             isNearLimit={isNearLimit}
             isRegistered={isRegistered}
+            paidAccess={paidAccess}
             limit={limit}
             license={license}
             recentHighlights={recentHighlights}
@@ -382,6 +389,7 @@ function DashboardView({
   isAtLimit,
   isNearLimit,
   isRegistered,
+  paidAccess,
   limit,
   license,
   recentHighlights,
@@ -410,6 +418,7 @@ function DashboardView({
   isAtLimit: boolean;
   isNearLimit: boolean;
   isRegistered: boolean;
+  paidAccess: boolean;
   limit: number;
   license: LicenseState;
   recentHighlights: Highlight[];
@@ -454,7 +463,7 @@ function DashboardView({
           isAtLimit={isAtLimit}
         />
 
-        {!license.hasAccess && !isRegistered && (
+        {!paidAccess && !isRegistered && (
           <LimitPrompt
             authError={authError}
             connectingAccount={connectingAccount}
@@ -464,7 +473,7 @@ function DashboardView({
           />
         )}
 
-        {!license.hasAccess && isRegistered && isAtLimit && (
+        {!paidAccess && isRegistered && isAtLimit && (
           <div className="mt-3 rounded-lg border border-[#f2c48d] bg-[#fff7ed] p-3 text-xs text-[#8a4b08]">
             You have reached {REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()} free highlights. Upgrade when you are ready for a larger research library.
             <button onClick={onPurchase} className="mt-2 block font-bold text-[#7a3e00] underline">
@@ -491,10 +500,10 @@ function DashboardView({
           <ActionButton label="Open sidebar" icon={<PanelIcon />} onClick={onOpenSidebar} />
           <ActionButton label="All highlights" icon={<ListIcon />} onClick={onOpenAll} />
           <ActionButton label="Pricing plans" icon={<PriceTagIcon />} onClick={onPurchase} />
-          <ActionButton label="Export PDF" icon={<DownloadIcon />} locked={!license.hasAccess} onClick={license.hasAccess ? () => onExport('pdf') : onPurchase} />
-          <ActionButton label="Export Docs" icon={<DocumentIcon />} locked={!license.hasAccess} onClick={license.hasAccess ? () => onExport('doc') : onPurchase} />
+          <ActionButton label="Export PDF" icon={<DownloadIcon />} locked={!paidAccess} onClick={paidAccess ? () => onExport('pdf') : onPurchase} />
+          <ActionButton label="Export Docs" icon={<DocumentIcon />} locked={!paidAccess} onClick={paidAccess ? () => onExport('doc') : onPurchase} />
         </div>
-        {!license.hasAccess && (
+        {!paidAccess && (
           <p className="mt-2 text-[11px] text-ink-soft">Exports are available with a paid plan. Your free library stays fully manageable here.</p>
         )}
       </section>
@@ -865,7 +874,7 @@ function AccountPanel({
         <p className="mt-1 text-[11px] font-semibold text-ink-soft">Enable Cloud sync to save highlights to the database.</p>
       )}
       {syncMessage && <p className="mt-1 text-[11px] font-semibold text-ink-soft">{syncMessage}</p>}
-      {!license.hasAccess && (
+      {!hasPaidAccess(license) && (
         <button onClick={onPurchase} className="mt-2 w-full rounded-lg bg-ink px-3 py-2 font-bold text-white transition hover:bg-black">
           Upgrade for exports
         </button>
@@ -889,8 +898,8 @@ function Metric({ label, value, tone }: { label: string; value: number; tone: 'g
 }
 
 function PlanBadge({ license, onClick }: { license: LicenseState; onClick: () => void }) {
-  if (license.hasAccess) {
-    return <span className="rounded-full bg-[#e8f6ee] px-3 py-1 text-[11px] font-bold text-[#267344]">Pro</span>;
+  if (hasPaidAccess(license)) {
+    return <span className="rounded-full bg-[#e8f6ee] px-3 py-1 text-[11px] font-bold text-[#267344]">{license.planName || 'Paid'}</span>;
   }
   if (license.key && license.userId) {
     return <span className="rounded-full bg-[#eef0fa] px-3 py-1 text-[11px] font-bold text-accent">Free {REGISTERED_HIGHLIGHT_LIMIT.toLocaleString()}</span>;

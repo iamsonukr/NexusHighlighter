@@ -22,7 +22,7 @@ async function migrateLegacyHighlights(req: AuthedRequest) {
 }
 
 /**
- * GET /api/highlights?since=<clientUpdatedAt>
+ * GET /api/highlights?since=<serverUpdatedAtMs>
  * Returns everything changed after `since` for this verified customer.
  */
 export async function listHighlights(req: AuthedRequest, res: Response) {
@@ -30,9 +30,10 @@ export async function listHighlights(req: AuthedRequest, res: Response) {
   await migrateLegacyHighlights(req);
 
   const since = Number(req.query.since ?? 0);
+  const sinceDate = new Date(Number.isFinite(since) ? since : 0);
   const docs = await Highlight.find({
     syncOwnerHash,
-    clientUpdatedAt: { $gt: Number.isFinite(since) ? since : 0 },
+    updatedAt: { $gt: sinceDate },
   }).lean();
   res.json({ success: true, data: docs });
 }

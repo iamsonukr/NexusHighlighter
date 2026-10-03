@@ -25,6 +25,11 @@ export function getPlanHighlightLimit(planType?: string | null, planName?: strin
   return REGISTERED_HIGHLIGHT_LIMIT;
 }
 
+export function isPaidPlan(planType?: string | null, planName?: string | null) {
+  const plan = `${planType ?? ''} ${planName ?? ''}`.toLowerCase();
+  return plan.includes('basic') || plan.includes('advance') || plan.includes('pro');
+}
+
 // Percent-of-limit thresholds at which we start nudging toward upgrading,
 // so the first thing a near-limit user sees isn't a hard wall.
 export const HIGHLIGHT_WARNING_THRESHOLD = 0.9; // show a soft warning at 90%

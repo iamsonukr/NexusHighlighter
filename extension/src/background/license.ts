@@ -1,6 +1,7 @@
 import type { LicenseState, VerifyLicenseResponse } from '@/types';
 import { EMPTY_LICENSE_STATE } from '@/types';
 import { getLicenseState, saveLicenseState } from '@/storage/db';
+import { isPaidPlan } from '@/constants';
 
 /**
  * Licensing model (per product owner's requirement):
@@ -118,7 +119,7 @@ export function responseToState(key: string, response: VerifyLicenseResponse): L
   }
 
   const planType = response.plan?.type ? String(response.plan.type).toLowerCase() : null;
-  const isPro = Boolean(response.hasAccess && planType !== 'free');
+  const isPro = Boolean(response.hasAccess && isPaidPlan(planType, response.plan?.name));
 
   return {
     key,

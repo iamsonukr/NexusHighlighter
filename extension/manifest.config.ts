@@ -55,7 +55,7 @@ export default defineManifest({
   web_accessible_resources: [
     defineDynamicResource({
       matches: ['http://*/*', 'https://*/*'],
-      use_dynamic_url: true,
+      use_dynamic_url: false,
     }),
   ],
   commands: {
